@@ -205,3 +205,4 @@ __marimo__/
 .DS_Store
 resources/bin/cockpitdecks-launcher
 ogimet_cache.sqlite
+variable-database-dump.yaml
