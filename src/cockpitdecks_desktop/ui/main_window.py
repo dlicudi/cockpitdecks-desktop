@@ -12,6 +12,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -37,8 +38,9 @@ from cockpitdecks_desktop.services.desktop_settings import (
 from cockpitdecks_desktop.services.live_apis import (
     cockpitdecks_metrics_json,
     cockpitdecks_metrics_status_line,
-    cockpitdecks_session_status_line,
     cockpitdecks_web_status_line,
+    fetch_session_info,
+    SessionInfo,
     xplane_capabilities_status_line,
 )
 from cockpitdecks_desktop.services.process_runner import stream_shell_command
@@ -88,12 +90,12 @@ class CommandWorker(QObject):
 
 class MainWindow(QMainWindow):
     log_line = Signal(str)
-    live_poll_done = Signal(str, str, str, str, str, object)
+    live_poll_done = Signal(str, str, object, str, str, object)
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Cockpitdecks Desktop")
-        self.resize(980, 640)
+        self.resize(980, 680)
         self._thread: QThread | None = None
         self._worker: CommandWorker | None = None
         self._launcher_process = None
@@ -104,20 +106,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         root = QVBoxLayout(central)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        title = QLabel("Cockpitdecks Desktop")
-        title.setObjectName("title")
-        title.setStyleSheet("font-size: 22px; font-weight: 600;")
-
-        subtitle = QLabel(
-            "Use <b>Config</b> for paths and API settings. This tab shows live connectivity and launcher state."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setTextFormat(Qt.RichText)
-        subtitle.setStyleSheet("color: #5c5c5c; font-size: 13px;")
-
+        # ── Status value labels (referenced by refresh_info_panel / _apply_live_poll) ──
         self.info_desktop = QLabel("—")
         self.info_launcher = QLabel("—")
         self.info_xplane = QLabel("…")
@@ -126,205 +118,321 @@ class MainWindow(QMainWindow):
         self.info_live_poll_at = QLabel("—")
         self.info_last_check = QLabel("—")
         self.info_runtime_metrics = QLabel("—")
+        _val_style = "font-size: 13px; border: none; padding: 0;"
         for lab in (
-            self.info_desktop,
-            self.info_launcher,
-            self.info_xplane,
-            self.info_cockpit_web,
-            self.info_session,
-            self.info_live_poll_at,
-            self.info_last_check,
-            self.info_runtime_metrics,
+            self.info_desktop, self.info_launcher, self.info_xplane,
+            self.info_cockpit_web, self.info_session, self.info_live_poll_at,
+            self.info_last_check, self.info_runtime_metrics,
         ):
-            lab.setWordWrap(True)
+            lab.setWordWrap(False)
             lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            lab.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            lab.setStyleSheet(_val_style)
+            _sp = lab.sizePolicy()
+            _sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+            lab.setSizePolicy(_sp)
 
-        self.info_panel = QFrame()
-        self.info_panel.setObjectName("statusCard")
-        self.info_panel.setStyleSheet(
-            """
-            QFrame#statusCard {
-                background-color: #f4f5f7;
-                border: 1px solid #dadde3;
-                border-radius: 10px;
-            }
-            QLabel#statusKeyLabel {
-                color: #4a4a4a;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            """
-        )
-        info_layout = QVBoxLayout(self.info_panel)
-        info_layout.setContentsMargins(0, 8, 0, 8)
-        info_layout.setSpacing(0)
+        # ── Helper: status indicator dot ──
+        def _dot(color: str = "#94a3b8") -> QLabel:
+            d = QLabel()
+            d.setFixedSize(8, 8)
+            d.setStyleSheet(f"background-color: {color}; border-radius: 4px; border: none;")
+            return d
 
-        def section_title(t: str) -> QLabel:
-            w = QLabel(t)
-            w.setStyleSheet(
-                "font-size: 11px; font-weight: 700; color: #6e7380; letter-spacing: 0.04em; "
-                "text-transform: uppercase; padding: 14px 16px 6px 16px;"
+        # ── Helper: card frame ──
+        def _card(bg: str = "#ffffff", border: str = "#e2e5eb") -> QFrame:
+            f = QFrame()
+            f.setStyleSheet(
+                f"QFrame {{ background-color: {bg}; border: 1px solid {border}; border-radius: 10px; }}"
             )
-            return w
+            return f
 
-        def add_row(key: str, value: QLabel) -> None:
-            row = QWidget()
-            hl = QHBoxLayout(row)
-            hl.setContentsMargins(16, 8, 16, 8)
-            hl.setSpacing(16)
-            kl = QLabel(key)
-            kl.setObjectName("statusKeyLabel")
-            kl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-            kl.setFixedWidth(200)
-            kl.setWordWrap(True)
-            hl.addWidget(kl, 0, Qt.AlignmentFlag.AlignTop)
-            hl.addWidget(value, 1, Qt.AlignmentFlag.AlignTop)
-            info_layout.addWidget(row)
+        # ── Helper: section heading inside a card ──
+        def _section_heading(text: str) -> QLabel:
+            h = QLabel(text)
+            h.setStyleSheet(
+                "font-size: 11px; font-weight: 700; color: #6b7280; letter-spacing: 0.05em; "
+                "text-transform: uppercase; border: none; padding: 0; margin: 0;"
+            )
+            return h
 
-        info_layout.addWidget(section_title("Application"))
-        add_row("Desktop app", self.info_desktop)
-        add_row("Launcher", self.info_launcher)
-
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.HLine)
-        sep1.setStyleSheet("color: #dadde3; max-height: 1px; margin-left: 12px; margin-right: 12px;")
-        info_layout.addWidget(sep1)
-
-        info_layout.addWidget(section_title("Live connectivity"))
-        add_row("X-Plane Web API", self.info_xplane)
-        add_row("Cockpitdecks web UI", self.info_cockpit_web)
-        add_row("Loaded session", self.info_session)
-        add_row("Last poll time", self.info_live_poll_at)
-
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet("color: #dadde3; max-height: 1px; margin-left: 12px; margin-right: 12px;")
-        info_layout.addWidget(sep2)
-
-        info_layout.addWidget(section_title("Diagnostics"))
-        add_row("Last preflight", self.info_last_check)
-        add_row("Runtime metrics", self.info_runtime_metrics)
-
-        self.metrics_card = QFrame()
-        self.metrics_card.setObjectName("metricsCard")
-        self.metrics_card.setStyleSheet(
-            """
-            QFrame#metricsCard {
-                background-color: #f4f7fb;
-                border: 1px solid #dbe4f0;
-                border-radius: 10px;
-            }
-            """
+        # ════════════════════════════════════════
+        #  HEADER BAR
+        # ════════════════════════════════════════
+        header = QFrame()
+        header.setStyleSheet(
+            "QFrame { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #1e293b, stop:1 #334155); border: none; }"
         )
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 14, 20, 14)
+        header_layout.setSpacing(10)
+        title = QLabel("Cockpitdecks Desktop")
+        title.setStyleSheet("font-size: 18px; font-weight: 700; color: #f1f5f9; border: none;")
+        self._header_version = QLabel("")
+        self._header_version.setStyleSheet("font-size: 12px; color: #94a3b8; border: none;")
+        header_layout.addWidget(title)
+        header_layout.addWidget(self._header_version)
+        header_layout.addStretch(1)
+        self._header_poll_time = QLabel("")
+        self._header_poll_time.setStyleSheet("font-size: 11px; color: #64748b; border: none;")
+        header_layout.addWidget(self._header_poll_time)
+
+        # ════════════════════════════════════════
+        #  ACTION BAR (below header, inside status tab)
+        # ════════════════════════════════════════
+        action_bar = QFrame()
+        action_bar.setObjectName("actionBar")
+        action_bar.setStyleSheet(
+            "QFrame#actionBar { background-color: #f8fafc; border: none; "
+            "border-bottom: 1px solid #e2e5eb; }"
+        )
+        ab_layout = QHBoxLayout(action_bar)
+        ab_layout.setContentsMargins(20, 10, 20, 10)
+        ab_layout.setSpacing(8)
+
+        self.btn_start = QPushButton("Start")
+        self.btn_start.setObjectName("primaryButton")
+        self.btn_restart = QPushButton("Restart")
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setObjectName("stopButton")
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_check = QPushButton("Preflight")
+        self.btn_update = QPushButton("Updates")
+        for b in (self.btn_start, self.btn_restart, self.btn_stop,
+                  self.btn_refresh, self.btn_check, self.btn_update):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        ab_layout.addWidget(self.btn_start)
+        ab_layout.addWidget(self.btn_restart)
+        ab_layout.addWidget(self.btn_stop)
+        ab_sep = QFrame()
+        ab_sep.setFrameShape(QFrame.Shape.VLine)
+        ab_sep.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
+        ab_layout.addWidget(ab_sep)
+        ab_layout.addWidget(self.btn_refresh)
+        ab_layout.addWidget(self.btn_check)
+        ab_layout.addWidget(self.btn_update)
+        ab_layout.addStretch(1)
+
+        # ════════════════════════════════════════
+        #  LAST ACTION FEEDBACK
+        # ════════════════════════════════════════
+        self.status_feedback = QLabel("Ready")
+        self.status_feedback.setWordWrap(False)
+        self.status_feedback.setTextFormat(Qt.PlainText)
+        self.status_feedback.setStyleSheet(
+            "background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; "
+            "padding: 6px 12px; color: #166534; font-size: 12px;"
+        )
+        self.status_feedback.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        sp = self.status_feedback.sizePolicy()
+        sp.setHorizontalPolicy(sp.Policy.Ignored)
+        self.status_feedback.setSizePolicy(sp)
+
+        # ════════════════════════════════════════
+        #  CONNECTIVITY CARD (left)
+        # ════════════════════════════════════════
+        conn_card = _card()
+        conn_layout = QVBoxLayout(conn_card)
+        conn_layout.setContentsMargins(16, 14, 16, 14)
+        conn_layout.setSpacing(0)
+        conn_layout.addWidget(_section_heading("Connectivity"))
+        conn_layout.addSpacing(10)
+
+        self._dot_launcher = _dot()
+        self._dot_xplane = _dot()
+        self._dot_cockpit_web = _dot()
+
+        _key_qss = "font-size: 11px; font-weight: 600; color: #6b7280; border: none; padding: 0;"
+
+        def _status_item(dot: QLabel, key: str, value: QLabel) -> QWidget:
+            """Dot + key on one line, value below — compact and never wraps the key."""
+            item = QWidget()
+            vl = QVBoxLayout(item)
+            vl.setContentsMargins(0, 6, 0, 6)
+            vl.setSpacing(2)
+            top = QHBoxLayout()
+            top.setContentsMargins(0, 0, 0, 0)
+            top.setSpacing(6)
+            top.addWidget(dot)
+            kl = QLabel(key)
+            kl.setStyleSheet(_key_qss)
+            top.addWidget(kl)
+            top.addStretch(1)
+            vl.addLayout(top)
+            vl.addWidget(value)
+            return item
+
+        conn_layout.addWidget(_status_item(self._dot_launcher, "Launcher", self.info_launcher))
+        conn_layout.addWidget(_status_item(self._dot_xplane, "X-Plane API", self.info_xplane))
+        conn_layout.addWidget(_status_item(self._dot_cockpit_web, "Cockpitdecks Web", self.info_cockpit_web))
+
+        # Session sub-section — split into individual fields
+        sess_sep = QFrame()
+        sess_sep.setFrameShape(QFrame.Shape.HLine)
+        sess_sep.setStyleSheet("color: #e5e7eb; max-height: 1px; border: none;")
+        conn_layout.addSpacing(4)
+        conn_layout.addWidget(sess_sep)
+        conn_layout.addSpacing(6)
+
+        conn_layout.addWidget(_section_heading("Session"))
+        conn_layout.addSpacing(6)
+
+        self.info_sess_aircraft = QLabel("—")
+        self.info_sess_decks = QLabel("—")
+        self.info_sess_config = QLabel("—")
+        self.info_sess_version = QLabel("—")
+        for sl in (self.info_sess_aircraft, self.info_sess_decks, self.info_sess_config, self.info_sess_version):
+            sl.setWordWrap(False)
+            sl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            sl.setStyleSheet(_val_style)
+            _sp = sl.sizePolicy()
+            _sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+            sl.setSizePolicy(_sp)
+
+        def _kv_row(key: str, value: QLabel) -> QWidget:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            rl.setSpacing(8)
+            kl = QLabel(key)
+            kl.setStyleSheet(_key_qss)
+            kl.setFixedWidth(70)
+            kl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            rl.addWidget(kl)
+            rl.addWidget(value, 1)
+            return row
+
+        conn_layout.addWidget(_kv_row("Aircraft", self.info_sess_aircraft))
+        conn_layout.addWidget(_kv_row("Decks", self.info_sess_decks))
+        conn_layout.addWidget(_kv_row("Config", self.info_sess_config))
+        conn_layout.addWidget(_kv_row("Version", self.info_sess_version))
+
+        conn_layout.addStretch(1)
+
+        # Keep info_session for backward compat (hidden)
+        self.info_session.setVisible(False)
+
+        # ════════════════════════════════════════
+        #  METRICS CARD (right)
+        # ════════════════════════════════════════
+        self.metrics_card = _card()
         metrics_layout = QVBoxLayout(self.metrics_card)
-        metrics_layout.setContentsMargins(14, 12, 14, 12)
-        metrics_layout.setSpacing(10)
-        metrics_title = QLabel("Runtime Metrics")
-        metrics_title.setStyleSheet("font-size: 12px; font-weight: 700; color: #5f6b7a; text-transform: uppercase;")
-        metrics_layout.addWidget(metrics_title)
+        metrics_layout.setContentsMargins(16, 14, 16, 14)
+        metrics_layout.setSpacing(8)
+        metrics_layout.addWidget(_section_heading("Runtime Metrics"))
+
+        _bar_height = "QProgressBar { max-height: 8px; border-radius: 4px; background: #e5e7eb; border: none; }"
 
         self.metric_cpu_label = QLabel("CPU —")
+        self.metric_cpu_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151; border: none;")
         self.metric_cpu_bar = QProgressBar()
         self.metric_cpu_bar.setRange(0, 100)
         self.metric_cpu_bar.setValue(0)
         self.metric_cpu_bar.setTextVisible(False)
+        self.metric_cpu_bar.setStyleSheet(_bar_height)
 
         self.metric_mem_label = QLabel("Memory —")
+        self.metric_mem_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151; border: none;")
         self.metric_mem_bar = QProgressBar()
         self.metric_mem_bar.setRange(0, 100)
         self.metric_mem_bar.setValue(0)
         self.metric_mem_bar.setTextVisible(False)
-
-        self.metric_summary = QLabel("Threads —   |   Variables —   |   Datarefs —   |   Uptime —")
-        self.metric_summary.setStyleSheet("color: #475569; font-size: 12px;")
+        self.metric_mem_bar.setStyleSheet(_bar_height)
 
         metrics_layout.addWidget(self.metric_cpu_label)
         metrics_layout.addWidget(self.metric_cpu_bar)
+        metrics_layout.addSpacing(2)
         metrics_layout.addWidget(self.metric_mem_label)
         metrics_layout.addWidget(self.metric_mem_bar)
-        metrics_layout.addWidget(self.metric_summary)
 
-        actions_outer = QFrame()
-        actions_outer.setObjectName("actionBar")
-        av = QVBoxLayout(actions_outer)
-        av.setContentsMargins(12, 12, 12, 12)
-        av.setSpacing(10)
-        status_actions = QHBoxLayout()
-        status_actions.setSpacing(10)
-        self.btn_refresh = QPushButton("Refresh status")
-        self.btn_check = QPushButton("Run Preflight")
-        self.btn_update = QPushButton("Check Updates")
-        self.btn_start = QPushButton("Start")
-        self.btn_start.setObjectName("primaryButton")
-        self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_restart = QPushButton("Restart")
-        self.btn_restart.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_stop = QPushButton("Stop")
-        self.btn_stop.setObjectName("stopButton")
-        self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
-        for b in (self.btn_refresh, self.btn_check, self.btn_update):
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-        status_actions.addWidget(self.btn_refresh)
-        status_actions.addWidget(self.btn_check)
-        status_actions.addWidget(self.btn_update)
-        status_actions.addStretch(1)
-        status_actions2 = QHBoxLayout()
-        status_actions2.setSpacing(10)
-        status_actions2.addWidget(self.btn_start)
-        status_actions2.addWidget(self.btn_restart)
-        status_actions2.addWidget(self.btn_stop)
-        status_actions2.addStretch(1)
-        av.addLayout(status_actions)
-        av.addLayout(status_actions2)
+        # Metric counters in a 2x2 grid
+        metrics_sep = QFrame()
+        metrics_sep.setFrameShape(QFrame.Shape.HLine)
+        metrics_sep.setStyleSheet("color: #e5e7eb; max-height: 1px; border: none;")
+        metrics_layout.addSpacing(4)
+        metrics_layout.addWidget(metrics_sep)
+        metrics_layout.addSpacing(4)
 
-        status_footer = QLabel(
-            "Tip: Run <b>Preflight</b> to print the same checks to the Logs tab. "
-            "If the web port is busy, change <b>Poll: Cockpitdecks web port</b> on the Config tab."
-        )
-        status_footer.setWordWrap(True)
-        status_footer.setTextFormat(Qt.RichText)
-        status_footer.setStyleSheet("color: #7a7f8c; font-size: 12px; padding: 8px 2px 0 2px;")
+        self.metric_threads = QLabel("—")
+        self.metric_variables = QLabel("—")
+        self.metric_datarefs = QLabel("—")
+        self.metric_uptime = QLabel("—")
+        _counter_val_qss = "font-size: 20px; font-weight: 700; color: #1e293b; border: none;"
+        _counter_lbl_qss = "font-size: 11px; color: #6b7280; border: none;"
+        for cv in (self.metric_threads, self.metric_variables, self.metric_datarefs, self.metric_uptime):
+            cv.setStyleSheet(_counter_val_qss)
+            cv.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.status_feedback = QLabel("Last action: Ready")
-        self.status_feedback.setWordWrap(True)
-        self.status_feedback.setTextFormat(Qt.PlainText)
-        self.status_feedback.setStyleSheet(
-            "background: #f5f7fb; border: 1px solid #d7dceb; border-radius: 8px; "
-            "padding: 8px 10px; color: #334155; font-size: 12px;"
-        )
+        counters_grid = QGridLayout()
+        counters_grid.setSpacing(6)
+        for col, (val_label, caption) in enumerate([
+            (self.metric_threads, "Threads"),
+            (self.metric_variables, "Variables"),
+            (self.metric_datarefs, "Datarefs"),
+            (self.metric_uptime, "Uptime"),
+        ]):
+            cap = QLabel(caption)
+            cap.setStyleSheet(_counter_lbl_qss)
+            cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            counters_grid.addWidget(val_label, 0, col)
+            counters_grid.addWidget(cap, 1, col)
+        metrics_layout.addLayout(counters_grid)
+        metrics_layout.addStretch(1)
 
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setPlaceholderText("Preflight, launch, and Cockpitdecks output will appear here…")
-        self.log.setStyleSheet("font-family: Menlo, Monaco, monospace; font-size: 12px;")
+        # Keep self.metric_summary for compatibility with _apply_metrics_visuals
+        self.metric_summary = QLabel("")
+        self.metric_summary.setVisible(False)
 
+        # Also keep info_runtime_metrics for compatibility
+        self.info_runtime_metrics.setVisible(False)
+
+        # ════════════════════════════════════════
+        #  DIAGNOSTICS ROW
+        # ════════════════════════════════════════
+        diag_card = _card(bg="#fafafa", border="#e5e7eb")
+        diag_layout = QHBoxLayout(diag_card)
+        diag_layout.setContentsMargins(16, 10, 16, 10)
+        diag_layout.setSpacing(10)
+        diag_lbl = QLabel("Last preflight")
+        diag_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280; border: none;")
+        diag_layout.addWidget(diag_lbl)
+        diag_layout.addWidget(self.info_last_check, 1)
+
+        # ════════════════════════════════════════
+        #  ASSEMBLE STATUS TAB
+        # ════════════════════════════════════════
         status_inner = QWidget()
-        status_inner_layout = QVBoxLayout(status_inner)
-        status_inner_layout.setContentsMargins(8, 8, 8, 12)
-        status_inner_layout.setSpacing(12)
-        status_inner_layout.addWidget(title)
-        status_inner_layout.addWidget(subtitle)
-        status_inner_layout.addWidget(actions_outer)
-        status_inner_layout.addWidget(self.status_feedback)
-        status_inner_layout.addWidget(self.info_panel)
-        status_inner_layout.addWidget(self.metrics_card)
-        status_inner_layout.addWidget(status_footer)
+        si = QVBoxLayout(status_inner)
+        si.setContentsMargins(20, 16, 20, 20)
+        si.setSpacing(12)
+        si.addWidget(self.status_feedback)
+
+        cards_row = QHBoxLayout()
+        cards_row.setSpacing(12)
+        cards_row.addWidget(conn_card, 3)
+        cards_row.addWidget(self.metrics_card, 2)
+        si.addLayout(cards_row, 1)
+
+        si.addWidget(diag_card)
 
         status_scroll = QScrollArea()
         status_scroll.setWidgetResizable(True)
         status_scroll.setFrameShape(QFrame.Shape.NoFrame)
         status_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        status_scroll.setAlignment(Qt.AlignmentFlag.AlignTop)
         status_scroll.setWidget(status_inner)
 
         tab_status = QWidget()
         tab_status_layout = QVBoxLayout(tab_status)
         tab_status_layout.setContentsMargins(0, 0, 0, 0)
         tab_status_layout.setSpacing(0)
+        tab_status_layout.addWidget(action_bar)
         tab_status_layout.addWidget(status_scroll, 1)
 
+        # ════════════════════════════════════════
+        #  CONFIG TAB
+        # ════════════════════════════════════════
         tab_config = QWidget()
         tab_config_layout = QVBoxLayout(tab_config)
         tab_config_layout.setContentsMargins(0, 0, 0, 0)
@@ -335,6 +443,14 @@ class MainWindow(QMainWindow):
         settings_scroll.setFrameShape(QFrame.NoFrame)
         settings_scroll.setWidget(self.settings_form)
         tab_config_layout.addWidget(settings_scroll, 1)
+
+        # ════════════════════════════════════════
+        #  LOGS TAB
+        # ════════════════════════════════════════
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setPlaceholderText("Preflight, launch, and Cockpitdecks output will appear here…")
+        self.log.setStyleSheet("font-family: Menlo, Monaco, monospace; font-size: 12px;")
 
         tab_logs = QWidget()
         tab_logs_layout = QVBoxLayout(tab_logs)
@@ -347,17 +463,22 @@ class MainWindow(QMainWindow):
         tab_logs_layout.addLayout(logs_bar)
         tab_logs_layout.addWidget(self.log, 1)
 
+        # ════════════════════════════════════════
+        #  TAB WIDGET + ROOT ASSEMBLY
+        # ════════════════════════════════════════
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(tab_logs, "Logs")
 
+        root.addWidget(header)
         root.addWidget(self.tabs, 1)
 
         status = QStatusBar(self)
         status.showMessage("Ready")
         self.setStatusBar(status)
 
+        # ── Connections ──
         self.btn_refresh.clicked.connect(self.refresh_info_panel)
         self.btn_check.clicked.connect(self.run_preflight)
         self.btn_update.clicked.connect(self.check_updates)
@@ -388,7 +509,23 @@ class MainWindow(QMainWindow):
         # Keep status page concise; clip very long lines from verbose logs.
         if len(msg) > 220:
             msg = msg[:217] + "..."
-        self.status_feedback.setText(f"Last action: {msg}")
+        self.status_feedback.setText(msg)
+        low = msg.lower()
+        if any(k in low for k in ("error", "fail", "missing", "blocked", "kill")):
+            self.status_feedback.setStyleSheet(
+                "background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; "
+                "padding: 6px 12px; color: #991b1b; font-size: 12px;"
+            )
+        elif any(k in low for k in ("started", "complete", "ok", "saved", "ready")):
+            self.status_feedback.setStyleSheet(
+                "background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; "
+                "padding: 6px 12px; color: #166534; font-size: 12px;"
+            )
+        else:
+            self.status_feedback.setStyleSheet(
+                "background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; "
+                "padding: 6px 12px; color: #334155; font-size: 12px;"
+            )
 
     def _workspace(self) -> Path:
         return Path.home() / "GitHub"
@@ -429,7 +566,7 @@ class MainWindow(QMainWindow):
         running = self._launcher_is_running()
         port_listener = self._cockpit_web_port_listener()
         port_in_use = port_listener is not None
-        self.btn_stop.setEnabled(not cmd_busy and running)
+        self.btn_stop.setEnabled(not cmd_busy and (running or port_in_use))
         can_restart = not cmd_busy and launcher_ok and (running or not port_in_use)
         self.btn_restart.setEnabled(can_restart)
         can_start = not cmd_busy and not running and launcher_ok and not port_in_use
@@ -557,13 +694,23 @@ class MainWindow(QMainWindow):
         self._style_status_value(self.info_last_check, self.info_last_check.text())
         self._style_status_value(self.info_runtime_metrics, self.info_runtime_metrics.text())
 
+    def _set_dot(self, dot: QLabel, state: str) -> None:
+        """Set indicator dot color: 'ok' green, 'warn' amber, 'error' red, else gray."""
+        colors = {"ok": "#22c55e", "warn": "#f59e0b", "error": "#ef4444"}
+        c = colors.get(state, "#94a3b8")
+        dot.setStyleSheet(f"background-color: {c}; border-radius: 5px; border: none;")
+
     def _apply_metrics_visuals(self, metrics: dict | None) -> None:
+        _bar_base = "QProgressBar {{ max-height: 8px; border-radius: 4px; background: #e5e7eb; border: none; }} QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}"
         if not isinstance(metrics, dict):
             self.metric_cpu_label.setText("CPU —")
             self.metric_mem_label.setText("Memory —")
             self.metric_cpu_bar.setValue(0)
             self.metric_mem_bar.setValue(0)
-            self.metric_summary.setText("Threads —   |   Variables —   |   Datarefs —   |   Uptime —")
+            self.metric_threads.setText("—")
+            self.metric_variables.setText("—")
+            self.metric_datarefs.setText("—")
+            self.metric_uptime.setText("—")
             return
 
         p = metrics.get("process") if isinstance(metrics.get("process"), dict) else {}
@@ -581,11 +728,11 @@ class MainWindow(QMainWindow):
         self.metric_cpu_bar.setValue(cpu_val)
         self.metric_cpu_label.setText(f"CPU {float(cpu):.1f}%" if isinstance(cpu, (int, float)) else "CPU —")
         if cpu_val >= 85:
-            self.metric_cpu_bar.setStyleSheet("QProgressBar::chunk { background-color: #d14343; }")
+            self.metric_cpu_bar.setStyleSheet(_bar_base.format(color="#ef4444"))
         elif cpu_val >= 60:
-            self.metric_cpu_bar.setStyleSheet("QProgressBar::chunk { background-color: #d28a2e; }")
+            self.metric_cpu_bar.setStyleSheet(_bar_base.format(color="#f59e0b"))
         else:
-            self.metric_cpu_bar.setStyleSheet("QProgressBar::chunk { background-color: #2f9e44; }")
+            self.metric_cpu_bar.setStyleSheet(_bar_base.format(color="#22c55e"))
 
         if isinstance(rss_mb, (int, float)):
             mem_pct = int(max(0.0, min(100.0, (float(rss_mb) / 4096.0) * 100.0)))
@@ -594,39 +741,44 @@ class MainWindow(QMainWindow):
         else:
             self.metric_mem_bar.setValue(0)
             self.metric_mem_label.setText("Memory —")
-        self.metric_mem_bar.setStyleSheet("QProgressBar::chunk { background-color: #3b82f6; }")
+        self.metric_mem_bar.setStyleSheet(_bar_base.format(color="#3b82f6"))
 
-        threads_s = str(threads) if isinstance(threads, int) else "—"
-        vars_s = str(vars_n) if isinstance(vars_n, int) else "—"
-        drefs_s = str(drefs) if isinstance(drefs, int) else "—"
+        self.metric_threads.setText(str(threads) if isinstance(threads, int) else "—")
+        self.metric_variables.setText(str(vars_n) if isinstance(vars_n, int) else "—")
+        self.metric_datarefs.setText(str(drefs) if isinstance(drefs, int) else "—")
         if isinstance(uptime_s, (int, float)):
             uptime_i = int(uptime_s)
             h, rem = divmod(uptime_i, 3600)
             m, sec = divmod(rem, 60)
-            uptime_txt = f"{h:d}:{m:02d}:{sec:02d}"
+            self.metric_uptime.setText(f"{h:d}:{m:02d}:{sec:02d}")
         else:
-            uptime_txt = "—"
-        self.metric_summary.setText(f"Threads {threads_s}   |   Variables {vars_s}   |   Datarefs {drefs_s}   |   Uptime {uptime_txt}")
+            self.metric_uptime.setText("—")
 
     def refresh_info_panel(self) -> None:
-        self.info_desktop.setText(f"v{self._desktop_app_version()}")
+        ver = self._desktop_app_version()
+        self.info_desktop.setText(f"v{ver}")
+        self._header_version.setText(f"v{ver}")
 
         launcher = self._resolve_launcher_binary()
         wport = self._web_listen_port()
         tip_lines: list[str] = [f"Full path:\n{launcher}"]
         path_disp = _shorten_filesystem_path(launcher)
         if launcher.exists():
-            launcher_status = "Running" if self._launcher_is_running() else "Ready"
+            running = self._launcher_is_running()
+            launcher_status = "Running" if running else "Ready"
             listener = self._cockpit_web_port_listener()
             if listener is not None:
                 tip_lines.append(f"Listener on port {wport}: pid {listener[0]} ({listener[1]})")
                 self.info_launcher.setText(
-                    f"{launcher_status}  ·  {path_disp}  ·  port {wport} in use (pid {listener[0]})"
+                    f"{launcher_status}  ·  port {wport} (pid {listener[0]})"
                 )
+                self._set_dot(self._dot_launcher, "ok")
             else:
                 self.info_launcher.setText(f"{launcher_status}  ·  {path_disp}")
+                self._set_dot(self._dot_launcher, "ok" if running else "warn")
         else:
             self.info_launcher.setText(f"Missing  ·  {path_disp}")
+            self._set_dot(self._dot_launcher, "error")
         self.info_launcher.setToolTip("\n\n".join(tip_lines))
 
         self._refresh_status_value_styles()
@@ -644,11 +796,11 @@ class MainWindow(QMainWindow):
                 web_base = cockpit_web_base(st)
                 xp_line, _ = xplane_capabilities_status_line(base_url=xp_base)
                 web_line, _ = cockpitdecks_web_status_line(url=f"{web_base}/")
-                session_line = cockpitdecks_session_status_line(base_url=web_base)
+                session_info = fetch_session_info(base_url=web_base)
                 metrics_line = cockpitdecks_metrics_status_line(base_url=web_base)
                 metrics_obj, _ = cockpitdecks_metrics_json(base_url=web_base)
                 ts = datetime.now().strftime("%H:%M:%S")
-                self.live_poll_done.emit(xp_line, web_line, session_line, metrics_line, ts, metrics_obj)
+                self.live_poll_done.emit(xp_line, web_line, session_info, metrics_line, ts, metrics_obj)
             finally:
                 self._live_poll_lock.release()
 
@@ -658,18 +810,39 @@ class MainWindow(QMainWindow):
         self,
         xplane_line: str,
         cockpit_web_line: str,
-        session_line: str,
+        session_info: SessionInfo,
         metrics_line: str,
         polled_at: str,
         metrics_obj: dict | None,
     ) -> None:
         self.info_xplane.setText(xplane_line)
         self.info_cockpit_web.setText(cockpit_web_line)
-        self.info_session.setText(session_line)
+        self.info_session.setText(session_info.one_line())
+
+        # Populate split session fields
+        if session_info.ok:
+            self.info_sess_aircraft.setText(session_info.aircraft)
+            self.info_sess_decks.setText(session_info.decks)
+            self.info_sess_config.setText(session_info.config_path)
+            self.info_sess_version.setText(f"v{session_info.version}" if session_info.version else "—")
+        else:
+            err = f"— ({session_info.error})"
+            self.info_sess_aircraft.setText(err)
+            self.info_sess_decks.setText("—")
+            self.info_sess_config.setText("—")
+            self.info_sess_version.setText("—")
+
         self.info_runtime_metrics.setText(metrics_line)
         self._apply_metrics_visuals(metrics_obj)
         self.info_live_poll_at.setText(polled_at)
+        self._header_poll_time.setText(f"Last poll {polled_at}")
         self._refresh_status_value_styles()
+
+        # Update connectivity dots
+        xp_lower = xplane_line.lower()
+        self._set_dot(self._dot_xplane, "error" if "unreachable" in xp_lower else "ok")
+        web_lower = cockpit_web_line.lower()
+        self._set_dot(self._dot_cockpit_web, "error" if "unreachable" in web_lower else "ok")
 
     def _mark_preflight_time(self) -> None:
         self.info_last_check.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -711,7 +884,7 @@ class MainWindow(QMainWindow):
         self._append(f"[preflight] X-Plane API: {xp_line}")
         web_line, _ = cockpitdecks_web_status_line(url=f"{cockpit_web_base(st)}/")
         self._append(f"[preflight] Cockpitdecks web: {web_line}")
-        self._append(f"[preflight] Loaded session: {cockpitdecks_session_status_line(base_url=cockpit_web_base(st))}")
+        self._append(f"[preflight] Loaded session: {fetch_session_info(base_url=cockpit_web_base(st)).one_line()}")
         self._append("[preflight] complete.")
         self.refresh_info_panel()
 
@@ -752,23 +925,40 @@ class MainWindow(QMainWindow):
         self._start_launcher_log_stream()
         self.refresh_info_panel()
 
-    def stop_cockpitdecks(self) -> None:
-        if not self._launcher_is_running():
-            self._append("[launch] no running cockpitdecks process")
-            self.refresh_info_panel()
-            return
-        assert self._launcher_process is not None
-        self._append(f"[launch] stopping cockpitdecks (pid={self._launcher_process.pid})")
-        self._launcher_process.terminate()
+    def _kill_port_listener(self) -> bool:
+        """Terminate whatever process is listening on the cockpitdecks web port. Returns True if a signal was sent."""
+        listener = self._cockpit_web_port_listener()
+        if listener is None:
+            return False
+        pid, name = listener
+        self._append(f"[launch] terminating orphan on port {self._web_listen_port()} (pid={pid}, {name})")
+        import signal
+
         try:
-            self._launcher_process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            self._append("[launch] stop timeout, sending kill")
-            self._launcher_process.kill()
+            os.kill(pid, signal.SIGTERM)
+        except OSError as exc:
+            self._append(f"[launch] failed to terminate pid {pid}: {exc}")
+            return False
+        return True
+
+    def stop_cockpitdecks(self) -> None:
+        if self._launcher_is_running():
+            assert self._launcher_process is not None
+            self._append(f"[launch] stopping cockpitdecks (pid={self._launcher_process.pid})")
+            self._launcher_process.terminate()
             try:
-                self._launcher_process.wait(timeout=2)
+                self._launcher_process.wait(timeout=8)
             except subprocess.TimeoutExpired:
-                pass
+                self._append("[launch] stop timeout, sending kill")
+                self._launcher_process.kill()
+                try:
+                    self._launcher_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        elif self._kill_port_listener():
+            pass  # orphan handled
+        else:
+            self._append("[launch] no running cockpitdecks process")
         self.refresh_info_panel()
 
     def restart_cockpitdecks(self) -> None:
@@ -786,6 +976,10 @@ class MainWindow(QMainWindow):
                     self._launcher_process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     pass
+        elif self._kill_port_listener():
+            import time
+
+            time.sleep(1)  # brief pause for port to free up
         else:
             self._append("[launch] no managed process running; restart acts like Start")
         self.start_cockpitdecks()
@@ -808,3 +1002,16 @@ class MainWindow(QMainWindow):
 
         self._launcher_log_thread = threading.Thread(target=_reader, name="LauncherLogStream", daemon=True)
         self._launcher_log_thread.start()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._launcher_is_running():
+            self._launcher_process.terminate()
+            try:
+                self._launcher_process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                self._launcher_process.kill()
+                try:
+                    self._launcher_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        super().closeEvent(event)

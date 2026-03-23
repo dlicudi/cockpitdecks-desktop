@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -113,8 +114,28 @@ def xplane_capabilities_status_line(
     return summarize_xplane_capabilities(caps), None
 
 
-def cockpitdecks_session_status_line(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 1.5) -> str:
-    """GET /desktop-status (Cockpitdecks ≥ with route). Returns one-line summary or placeholder."""
+@dataclass
+class SessionInfo:
+    """Structured session data from /desktop-status."""
+    version: str
+    aircraft: str
+    decks: str
+    config_path: str
+    error: str
+
+    @property
+    def ok(self) -> bool:
+        return not self.error
+
+    def one_line(self) -> str:
+        if self.error:
+            return f"— ({self.error})"
+        ver = f"v{self.version} | " if self.version else ""
+        return f"{ver}{self.aircraft} | {self.decks} | {self.config_path}"
+
+
+def fetch_session_info(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 1.5) -> SessionInfo:
+    """GET /desktop-status and return structured session info."""
     url = f"{base_url.rstrip('/')}/desktop-status"
     try:
         req = Request(url, headers={"Accept": "application/json"})
@@ -122,7 +143,7 @@ def cockpitdecks_session_status_line(*, base_url: str = "http://127.0.0.1:7777",
             raw = resp.read().decode("utf-8")
         data = json.loads(raw)
         if not isinstance(data, dict):
-            return "— (invalid JSON)"
+            return SessionInfo("", "", "", "", "invalid JSON")
         name = (data.get("aircraft_name") or "").strip() or "—"
         dcp = (data.get("deckconfig_path") or "").strip() or "—"
         decks = data.get("deck_names")
@@ -131,16 +152,20 @@ def cockpitdecks_session_status_line(*, base_url: str = "http://127.0.0.1:7777",
         else:
             deck_part = "no decks"
         ver = (data.get("cockpitdecks_version") or "").strip()
-        ver_part = f"v{ver} | " if ver else ""
-        return f"{ver_part}{name} | {deck_part} | {dcp}"
+        return SessionInfo(ver, name, deck_part, dcp, "")
     except HTTPError as exc:
         if exc.code == 404:
-            return "— (update Cockpitdecks: /desktop-status missing)"
-        return f"— (HTTP {exc.code})"
+            return SessionInfo("", "", "", "", "update Cockpitdecks: /desktop-status missing")
+        return SessionInfo("", "", "", "", f"HTTP {exc.code}")
     except URLError:
-        return "— (Cockpitdecks not running)"
+        return SessionInfo("", "", "", "", "Cockpitdecks not running")
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        return "— (could not read session)"
+        return SessionInfo("", "", "", "", "could not read session")
+
+
+def cockpitdecks_session_status_line(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 1.5) -> str:
+    """GET /desktop-status. Returns one-line summary or placeholder."""
+    return fetch_session_info(base_url=base_url, timeout=timeout).one_line()
 
 
 def cockpitdecks_metrics_json(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 1.5) -> tuple[dict[str, Any] | None, str | None]:

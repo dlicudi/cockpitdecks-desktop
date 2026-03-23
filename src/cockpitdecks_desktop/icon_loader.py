@@ -29,7 +29,7 @@ def _pixmap_to_square(pix: QPixmap, *, max_side: int = 1024) -> QPixmap:
             sum(c.red() for c in corners) // 4,
             sum(c.green() for c in corners) // 4,
             sum(c.blue() for c in corners) // 4,
-            255,
+            sum(c.alpha() for c in corners) // 4,
         )
         side = max(w, h)
         canvas = QPixmap(side, side)
