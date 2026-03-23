@@ -1,0 +1,1 @@
+"""cockpitdecks-desktop package."""

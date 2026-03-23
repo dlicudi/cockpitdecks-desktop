@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cockpitdecks-desktop"
+version = "0.1.0"
+description = "Desktop companion app for Cockpitdecks setup, updates, diagnostics, and launch."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+  { name = "Cockpitdecks Team" }
+]
+dependencies = [
+  "PySide6>=6.9",
+]
+
+[project.scripts]
+cockpitdecks-desktop = "cockpitdecks_desktop.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cockpitdecks_desktop"]
