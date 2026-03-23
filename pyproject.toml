@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
   "PySide6>=6.9",
+  "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

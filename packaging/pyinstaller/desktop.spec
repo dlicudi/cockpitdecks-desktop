@@ -1,11 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
 hiddenimports = collect_submodules("PySide6")
+
+if sys.platform == "darwin":
+    hiddenimports += collect_submodules("AppKit")
+    hiddenimports += collect_submodules("objc")
 
 block_cipher = None
 
@@ -13,6 +18,7 @@ ROOT = Path(os.getcwd()).resolve()
 LAUNCHER_SIDECAR = ROOT / "resources" / "bin" / "cockpitdecks-launcher"
 
 ICON_PNG = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.png"
+ICON_ICNS = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.icns"
 
 datas = []
 if LAUNCHER_SIDECAR.exists():
@@ -54,3 +60,17 @@ exe = EXE(
     console=False,
     icon=str(ICON_PNG) if ICON_PNG.exists() else None,
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        exe,
+        name="Cockpitdecks Desktop.app",
+        icon=str(ICON_ICNS) if ICON_ICNS.exists() else None,
+        bundle_identifier="com.cockpitdecks.desktop",
+        info_plist={
+            "CFBundleDisplayName": "Cockpitdecks Desktop",
+            "CFBundleShortVersionString": "1.0.0",
+            "NSHighResolutionCapable": True,
+            "LSBackgroundOnly": False,
+        },
+    )

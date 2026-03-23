@@ -2,19 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import html as html_mod
 import importlib.metadata
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QProgressBar,
     QPushButton,
@@ -40,6 +45,7 @@ from cockpitdecks_desktop.services.live_apis import (
     cockpitdecks_metrics_status_line,
     cockpitdecks_web_status_line,
     fetch_session_info,
+    reload_decks as api_reload_decks,
     SessionInfo,
     xplane_capabilities_status_line,
 )
@@ -196,16 +202,18 @@ class MainWindow(QMainWindow):
         self.btn_restart = QPushButton("Restart")
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setObjectName("stopButton")
+        self.btn_reload = QPushButton("Reload")
         self.btn_refresh = QPushButton("Refresh")
         self.btn_check = QPushButton("Preflight")
         self.btn_update = QPushButton("Updates")
         for b in (self.btn_start, self.btn_restart, self.btn_stop,
-                  self.btn_refresh, self.btn_check, self.btn_update):
+                  self.btn_reload, self.btn_refresh, self.btn_check, self.btn_update):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
 
         ab_layout.addWidget(self.btn_start)
         ab_layout.addWidget(self.btn_restart)
         ab_layout.addWidget(self.btn_stop)
+        ab_layout.addWidget(self.btn_reload)
         ab_sep = QFrame()
         ab_sep.setFrameShape(QFrame.Shape.VLine)
         ab_sep.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
@@ -450,7 +458,11 @@ class MainWindow(QMainWindow):
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setPlaceholderText("Preflight, launch, and Cockpitdecks output will appear here…")
-        self.log.setStyleSheet("font-family: Menlo, Monaco, monospace; font-size: 12px;")
+        self.log.setStyleSheet(
+            "QTextEdit { font-family: Menlo, Monaco, monospace; font-size: 12px;"
+            " background-color: #1e1e1e; color: #d4d4d4; border: 1px solid #333; border-radius: 4px; padding: 4px; }"
+            " QTextEdit::selection { background-color: #264f78; color: #ffffff; }"
+        )
 
         tab_logs = QWidget()
         tab_logs_layout = QVBoxLayout(tab_logs)
@@ -458,10 +470,73 @@ class MainWindow(QMainWindow):
         tab_logs_layout.setSpacing(8)
         logs_bar = QHBoxLayout()
         self.btn_clear_logs = QPushButton("Clear log")
+        self.btn_copy_logs = QPushButton("Copy selected")
+        self.btn_copy_logs.setToolTip("Copy selected text to clipboard (or all if nothing selected)")
+        self._log_level_combo = QComboBox()
+        self._log_level_combo.addItems(["All", "DEBUG", "INFO", "WARNING", "ERROR"])
+        self._log_level_combo.setCurrentText("WARNING")
+        self._log_level_combo.setToolTip("Minimum log level to display (desktop messages always shown)")
         logs_bar.addWidget(self.btn_clear_logs)
+        logs_bar.addWidget(self.btn_copy_logs)
+        logs_bar.addWidget(QLabel("Log level:"))
+        logs_bar.addWidget(self._log_level_combo)
         logs_bar.addStretch(1)
         tab_logs_layout.addLayout(logs_bar)
         tab_logs_layout.addWidget(self.log, 1)
+
+        # Search bar (hidden by default, toggled with Cmd+F)
+        self._log_search_bar = QFrame()
+        self._log_search_bar.setStyleSheet(
+            "QFrame { background: #2d2d2d; border: 1px solid #444; border-radius: 4px; }"
+        )
+        self._log_search_bar.setVisible(False)
+        search_layout = QHBoxLayout(self._log_search_bar)
+        search_layout.setContentsMargins(8, 4, 8, 4)
+        search_layout.setSpacing(6)
+        self._log_search_input = QLineEdit()
+        self._log_search_input.setPlaceholderText("Search logs…")
+        self._log_search_input.setStyleSheet(
+            "QLineEdit { background: #1e1e1e; color: #d4d4d4; border: 1px solid #555;"
+            " border-radius: 3px; padding: 3px 6px; font-family: Menlo, Monaco, monospace; font-size: 12px; }"
+        )
+        self._log_search_count = QLabel("")
+        self._log_search_count.setStyleSheet("color: #888; font-size: 11px; min-width: 70px;")
+        btn_prev = QPushButton("Prev")
+        btn_next = QPushButton("Next")
+        btn_close_search = QPushButton("Close")
+        for b in (btn_prev, btn_next, btn_close_search):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(24)
+            b.setStyleSheet(
+                "QPushButton { background: #3c3c3c; color: #d4d4d4; border: 1px solid #555;"
+                " border-radius: 3px; padding: 2px 8px; font-size: 11px; }"
+                " QPushButton:hover { background: #4c4c4c; }"
+            )
+        self._btn_filter = QPushButton("Filter")
+        self._btn_filter.setCheckable(True)
+        self._btn_filter.setToolTip("Toggle grep mode: show only matching lines")
+        self._btn_filter.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_filter.setFixedHeight(24)
+        self._btn_filter.setStyleSheet(
+            "QPushButton { background: #3c3c3c; color: #d4d4d4; border: 1px solid #555;"
+            " border-radius: 3px; padding: 2px 8px; font-size: 11px; }"
+            " QPushButton:hover { background: #4c4c4c; }"
+            " QPushButton:checked { background: #1a5276; color: #60a5fa; border-color: #60a5fa; }"
+        )
+        search_layout.addWidget(self._log_search_input, 1)
+        search_layout.addWidget(self._log_search_count)
+        search_layout.addWidget(self._btn_filter)
+        search_layout.addWidget(btn_prev)
+        search_layout.addWidget(btn_next)
+        search_layout.addWidget(btn_close_search)
+        tab_logs_layout.addWidget(self._log_search_bar)
+
+        self._log_search_input.textChanged.connect(self._log_search_apply)
+        self._log_search_input.returnPressed.connect(self._log_search_next)
+        self._btn_filter.toggled.connect(lambda _: self._log_search_apply(self._log_search_input.text()))
+        btn_next.clicked.connect(self._log_search_next)
+        btn_prev.clicked.connect(self._log_search_prev)
+        btn_close_search.clicked.connect(self._log_search_close)
 
         # ════════════════════════════════════════
         #  TAB WIDGET + ROOT ASSEMBLY
@@ -485,7 +560,9 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
         self.btn_stop.clicked.connect(self.stop_cockpitdecks)
+        self.btn_reload.clicked.connect(self.reload_decks)
         self.btn_clear_logs.clicked.connect(self.log.clear)
+        self.btn_copy_logs.clicked.connect(self._copy_log_selection)
         self.log_line.connect(self._append)
         self.live_poll_done.connect(self._apply_live_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
@@ -493,14 +570,226 @@ class MainWindow(QMainWindow):
         self.log.setAlignment(Qt.AlignTop)
         self.setStyleSheet(MAIN_WINDOW_QSS)
         self.btn_clear_logs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_copy_logs.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Cmd+F / Ctrl+F to toggle log search, Escape to close
+        find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        find_shortcut.activated.connect(self._log_search_toggle)
+        esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self._log_search_bar)
+        esc_shortcut.activated.connect(self._log_search_close)
         self.refresh_info_panel()
         self._live_timer = QTimer(self)
         self._live_timer.timeout.connect(self._schedule_live_poll)
         self._live_timer.start(4000)
 
+    # Color mapping for desktop [tag] prefixes and Python logging levels.
+    _LOG_COLORS: dict[str, str] = {
+        # Desktop tags
+        "error": "#ef4444",
+        "launch": "#3b82f6",
+        "preflight": "#8b5cf6",
+        "reload": "#06b6d4",
+        "update": "#a3a3a3",
+        "ok": "#22c55e",
+        "desktop": "#f59e0b",
+        # Python logging levels (from launcher stdout)
+        "CRITICAL": "#ef4444",
+        "ERROR": "#ef4444",
+        "WARNING": "#f59e0b",
+        "INFO": "#60a5fa",
+        "DEBUG": "#6b7280",
+        "DEPRECATION": "#a78bfa",
+        "SPAM": "#6b7280",
+    }
+    _LOG_TAG_RE = re.compile(r"^\[([a-z]+)\]")
+    _LOG_LEVEL_RE = re.compile(r"^\[\S+\]\s+(CRITICAL|ERROR|WARNING|INFO|DEBUG|DEPRECATION|SPAM)\b")
+
+    # Lines matching any of these patterns are always suppressed (noise).
+    _LOG_NOISE_RE = re.compile(
+        r'"(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) /\S* HTTP/\d\.\d"'  # Flask request logs
+        r"|_internal\.py:_log:\d+"                                       # Werkzeug internal logger tag
+    )
+
+    # Numeric priority for log-level filtering (higher = more severe).
+    _LOG_LEVEL_PRIORITY: dict[str, int] = {
+        "SPAM": 0,
+        "DEBUG": 10,
+        "DEPRECATION": 12,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40,
+        "CRITICAL": 50,
+    }
+
     def _append(self, text: str) -> None:
-        self.log.append(text)
+        if not text:
+            return
+
+        # Always suppress noise lines.
+        if self._LOG_NOISE_RE.search(text):
+            return
+
+        # Desktop [tag] messages (e.g. [launch], [preflight]) are always shown.
+        is_desktop_tag = self._LOG_TAG_RE.match(text) is not None
+
+        # Apply log-level filter to launcher log lines (not desktop tags).
+        if not is_desktop_tag:
+            m_level = self._LOG_LEVEL_RE.match(text)
+            if m_level:
+                line_level = m_level.group(1)
+                min_level = self._log_level_combo.currentText()
+                if min_level != "All":
+                    line_pri = self._LOG_LEVEL_PRIORITY.get(line_level, 20)
+                    min_pri = self._LOG_LEVEL_PRIORITY.get(min_level, 0)
+                    if line_pri < min_pri:
+                        return
+
+        escaped = html_mod.escape(text)
+        low = text.lower()
+
+        # Priority 1: error keywords anywhere
+        if any(k in low for k in ("error", "fail", "missing", "blocked", "kill")):
+            color = self._LOG_COLORS["error"]
+        else:
+            color = None
+            # Priority 2: desktop [tag] prefix
+            m = self._LOG_TAG_RE.match(text)
+            if m and m.group(1) in self._LOG_COLORS:
+                color = self._LOG_COLORS[m.group(1)]
+            # Priority 3: Python logging level from launcher output
+            if color is None:
+                m2 = self._LOG_LEVEL_RE.match(text)
+                if m2:
+                    color = self._LOG_COLORS[m2.group(1)]
+            if color is None:
+                color = "#d4d4d4"
+
+        self.log.append(f'<span style="color:{color}">{escaped}</span>')
         self._set_status_feedback(text)
+
+    def _copy_log_selection(self) -> None:
+        cursor = self.log.textCursor()
+        text = cursor.selectedText() if cursor.hasSelection() else self.log.toPlainText()
+        if text:
+            # QTextEdit uses U+2029 (paragraph separator) instead of \n in selections
+            text = text.replace("\u2029", "\n")
+            from PySide6.QtWidgets import QApplication
+            clipboard = QApplication.clipboard()
+            if clipboard:
+                clipboard.setText(text)
+                n = len(text.splitlines())
+                self._set_status_feedback(f"Copied {n} line(s) to clipboard")
+
+    # ── Log search ──
+
+    def _log_search_toggle(self) -> None:
+        if self._log_search_bar.isVisible():
+            self._log_search_close()
+        else:
+            self._log_search_bar.setVisible(True)
+            self._log_search_input.setFocus()
+            self._log_search_input.selectAll()
+
+    def _log_search_close(self) -> None:
+        self._log_search_bar.setVisible(False)
+        self._log_search_input.clear()
+        self._log_search_count.setText("")
+        self._btn_filter.setChecked(False)
+        self.log.setExtraSelections([])
+        self._log_show_all_blocks()
+
+    def _log_show_all_blocks(self) -> None:
+        """Make all text blocks visible again."""
+        block = self.log.document().begin()
+        while block.isValid():
+            block.setVisible(True)
+            block = block.next()
+        self.log.viewport().update()
+        self.log.document().markContentsDirty(0, self.log.document().characterCount())
+
+    def _log_search_apply(self, query: str) -> None:
+        """Dispatch to highlight or filter mode based on toggle state."""
+        if self._btn_filter.isChecked():
+            self._log_search_filter(query)
+        else:
+            self._log_search_highlight(query)
+
+    def _log_search_highlight(self, query: str) -> None:
+        """Highlight all matches and update the count label."""
+        self._log_show_all_blocks()
+        self.log.setExtraSelections([])
+        if not query:
+            self._log_search_count.setText("")
+            return
+
+        selections = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("#5a4a00"))
+        fmt.setForeground(QColor("#ffdd57"))
+
+        doc = self.log.document()
+        cursor = QTextCursor(doc)
+        while True:
+            cursor = doc.find(query, cursor)
+            if cursor.isNull():
+                break
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = QTextCursor(cursor)
+            sel.format = fmt
+            selections.append(sel)
+
+        self.log.setExtraSelections(selections)
+        n = len(selections)
+        self._log_search_count.setText(f"{n} match{'es' if n != 1 else ''}" if n else "no matches")
+
+    def _log_search_filter(self, query: str) -> None:
+        """Grep mode: hide lines that don't match, show only those that do."""
+        self.log.setExtraSelections([])
+        if not query:
+            self._log_show_all_blocks()
+            self._log_search_count.setText("")
+            return
+
+        query_lower = query.lower()
+        total = 0
+        matched = 0
+        block = self.log.document().begin()
+        while block.isValid():
+            total += 1
+            text = block.text()
+            if query_lower in text.lower():
+                block.setVisible(True)
+                matched += 1
+            else:
+                block.setVisible(False)
+            block = block.next()
+
+        self.log.viewport().update()
+        self.log.document().markContentsDirty(0, self.log.document().characterCount())
+        self._log_search_count.setText(f"{matched}/{total} lines")
+
+    def _log_search_next(self) -> None:
+        query = self._log_search_input.text()
+        if not query:
+            return
+        found = self.log.find(query)
+        if not found:
+            cursor = self.log.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            self.log.setTextCursor(cursor)
+            self.log.find(query)
+
+    def _log_search_prev(self) -> None:
+        query = self._log_search_input.text()
+        if not query:
+            return
+        from PySide6.QtGui import QTextDocument
+        found = self.log.find(query, QTextDocument.FindFlag.FindBackward)
+        if not found:
+            cursor = self.log.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.log.setTextCursor(cursor)
+            self.log.find(query, QTextDocument.FindFlag.FindBackward)
 
     def _set_status_feedback(self, text: str) -> None:
         msg = (text or "").strip()
@@ -609,6 +898,7 @@ class MainWindow(QMainWindow):
         self.btn_refresh.setEnabled(not busy)
         self.btn_check.setEnabled(not busy)
         self.btn_update.setEnabled(not busy)
+        self.btn_reload.setEnabled(not busy)
         self._refresh_start_stop_buttons(busy=busy)
         self.statusBar().showMessage("Working..." if busy else "Ready")
         if busy:
@@ -887,6 +1177,13 @@ class MainWindow(QMainWindow):
         self._append(f"[preflight] Loaded session: {fetch_session_info(base_url=cockpit_web_base(st)).one_line()}")
         self._append("[preflight] complete.")
         self.refresh_info_panel()
+
+    def reload_decks(self) -> None:
+        self._append("[reload] requesting deck config reload...")
+        st = load_desktop_settings()
+        ok, msg = api_reload_decks(base_url=cockpit_web_base(st))
+        tag = "reload" if ok else "error"
+        self._append(f"[{tag}] {msg}")
 
     def check_updates(self) -> None:
         self._append("[update] In-app updates are not implemented yet.")
