@@ -206,3 +206,4 @@ __marimo__/
 resources/bin/cockpitdecks-launcher
 ogimet_cache.sqlite
 variable-database-dump.yaml
+*.icns
