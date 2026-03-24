@@ -894,11 +894,20 @@ class MainWindow(QMainWindow):
         else:
             self.btn_restart.setToolTip("Restart is unavailable.")
 
+        cockpit_reachable = running or port_in_use
+        can_reload = not cmd_busy and cockpit_reachable
+        self.btn_reload.setEnabled(can_reload)
+        if can_reload:
+            self.btn_reload.setToolTip("Reload deck configurations.")
+        elif cmd_busy:
+            self.btn_reload.setToolTip("Disabled while another task is running.")
+        else:
+            self.btn_reload.setToolTip("Cockpitdecks is not running.")
+
     def _set_busy(self, busy: bool) -> None:
         self.btn_refresh.setEnabled(not busy)
         self.btn_check.setEnabled(not busy)
         self.btn_update.setEnabled(not busy)
-        self.btn_reload.setEnabled(not busy)
         self._refresh_start_stop_buttons(busy=busy)
         self.statusBar().showMessage("Working..." if busy else "Ready")
         if busy:
