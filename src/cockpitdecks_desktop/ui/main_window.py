@@ -185,7 +185,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self._header_poll_time)
 
         # ════════════════════════════════════════
-        #  ACTION BAR (below header, inside status tab)
+        #  ACTION BAR (below header, shared across all tabs)
         # ════════════════════════════════════════
         action_bar = QFrame()
         action_bar.setObjectName("actionBar")
@@ -435,7 +435,6 @@ class MainWindow(QMainWindow):
         tab_status_layout = QVBoxLayout(tab_status)
         tab_status_layout.setContentsMargins(0, 0, 0, 0)
         tab_status_layout.setSpacing(0)
-        tab_status_layout.addWidget(action_bar)
         tab_status_layout.addWidget(status_scroll, 1)
 
         # ════════════════════════════════════════
@@ -547,6 +546,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab_logs, "Logs")
 
         root.addWidget(header)
+        root.addWidget(action_bar)
         root.addWidget(self.tabs, 1)
 
         status = QStatusBar(self)
