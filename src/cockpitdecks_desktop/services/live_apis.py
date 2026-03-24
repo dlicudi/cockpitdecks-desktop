@@ -216,6 +216,28 @@ def cockpitdecks_metrics_status_line(*, base_url: str = "http://127.0.0.1:7777",
     return f"— ({err})" if err else "— (could not read metrics)"
 
 
+def reload_decks(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
+    """GET /reload-decks to trigger a full config reload. Returns (ok, message)."""
+    url = f"{base_url.rstrip('/')}/reload-decks"
+    try:
+        req = Request(url, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        status = data.get("status", "") if isinstance(data, dict) else ""
+        if status == "ok":
+            return True, "Decks reloaded successfully"
+        return True, f"Reload responded: {status or raw[:120]}"
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False, "Cockpitdecks too old: /reload-decks endpoint missing"
+        return False, f"HTTP {exc.code}"
+    except URLError:
+        return False, "Cockpitdecks not running"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return False, str(exc)
+
+
 def cockpitdecks_web_status_line(*, url: str = DEFAULT_COCKPIT_WEB, timeout: float = 1.5) -> tuple[str, str | None]:
     """Cheap check: GET / and discard body (Flask returns HTML)."""
     try:
