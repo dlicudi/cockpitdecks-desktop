@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
@@ -366,26 +367,40 @@ class MainWindow(QMainWindow):
         self.metric_threads = QLabel("—")
         self.metric_variables = QLabel("—")
         self.metric_datarefs = QLabel("—")
+        self.metric_dataref_rate = QLabel("—")
+        self.metric_queue_depth = QLabel("—")
+        self.metric_dirty_rendered = QLabel("—")
         self.metric_uptime = QLabel("—")
+        self._prev_dataref_values_processed: int | None = None
+        self._prev_dataref_poll_ts: float | None = None
+        self._prev_dirty_rendered: int | None = None
+        self._prev_dirty_poll_ts: float | None = None
         _counter_val_qss = "font-size: 20px; font-weight: 700; color: #1e293b; border: none;"
         _counter_lbl_qss = "font-size: 11px; color: #6b7280; border: none;"
-        for cv in (self.metric_threads, self.metric_variables, self.metric_datarefs, self.metric_uptime):
+        for cv in (self.metric_threads, self.metric_variables, self.metric_datarefs,
+                   self.metric_dataref_rate, self.metric_queue_depth, self.metric_dirty_rendered, self.metric_uptime):
             cv.setStyleSheet(_counter_val_qss)
             cv.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         counters_grid = QGridLayout()
         counters_grid.setSpacing(6)
-        for col, (val_label, caption) in enumerate([
+        _counters = [
             (self.metric_threads, "Threads"),
             (self.metric_variables, "Variables"),
             (self.metric_datarefs, "Datarefs"),
+            (self.metric_dataref_rate, "Dataref/s"),
+            (self.metric_queue_depth, "Queue"),
+            (self.metric_dirty_rendered, "Render/s"),
             (self.metric_uptime, "Uptime"),
-        ]):
+        ]
+        _cols = 4
+        for idx, (val_label, caption) in enumerate(_counters):
+            row, col = divmod(idx, _cols)
             cap = QLabel(caption)
             cap.setStyleSheet(_counter_lbl_qss)
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            counters_grid.addWidget(val_label, 0, col)
-            counters_grid.addWidget(cap, 1, col)
+            counters_grid.addWidget(val_label, row * 2, col)
+            counters_grid.addWidget(cap, row * 2 + 1, col)
         metrics_layout.addLayout(counters_grid)
         metrics_layout.addStretch(1)
 
@@ -1009,7 +1024,14 @@ class MainWindow(QMainWindow):
             self.metric_threads.setText("—")
             self.metric_variables.setText("—")
             self.metric_datarefs.setText("—")
+            self.metric_dataref_rate.setText("—")
+            self.metric_queue_depth.setText("—")
+            self.metric_dirty_rendered.setText("—")
             self.metric_uptime.setText("—")
+            self._prev_dataref_values_processed = None
+            self._prev_dataref_poll_ts = None
+            self._prev_dirty_rendered = None
+            self._prev_dirty_poll_ts = None
             return
 
         p = metrics.get("process") if isinstance(metrics.get("process"), dict) else {}
@@ -1045,6 +1067,39 @@ class MainWindow(QMainWindow):
         self.metric_threads.setText(str(threads) if isinstance(threads, int) else "—")
         self.metric_variables.setText(str(vars_n) if isinstance(vars_n, int) else "—")
         self.metric_datarefs.setText(str(drefs) if isinstance(drefs, int) else "—")
+
+        # Dataref/s rate from traffic counters
+        traffic = metrics.get("dataref_traffic") if isinstance(metrics.get("dataref_traffic"), dict) else {}
+        cur_vals = traffic.get("dataref_values_processed")
+        now_ts = time.time()
+        if isinstance(cur_vals, (int, float)) and self._prev_dataref_values_processed is not None and self._prev_dataref_poll_ts is not None:
+            dt = now_ts - self._prev_dataref_poll_ts
+            if dt > 0.5:
+                rate = (cur_vals - self._prev_dataref_values_processed) / dt
+                self.metric_dataref_rate.setText(f"{rate:.0f}")
+            # else keep previous display
+        else:
+            self.metric_dataref_rate.setText("—")
+        if isinstance(cur_vals, (int, float)):
+            self._prev_dataref_values_processed = int(cur_vals)
+            self._prev_dataref_poll_ts = now_ts
+
+        # Event queue depth and Render/s rate
+        queue_depth = c.get("event_queue_depth")
+        self.metric_queue_depth.setText(str(queue_depth) if isinstance(queue_depth, int) else "—")
+
+        cur_rendered = c.get("dirty_rendered")
+        if isinstance(cur_rendered, (int, float)) and self._prev_dirty_rendered is not None and self._prev_dirty_poll_ts is not None:
+            dt = now_ts - self._prev_dirty_poll_ts
+            if dt > 0.5:
+                render_rate = (cur_rendered - self._prev_dirty_rendered) / dt
+                self.metric_dirty_rendered.setText(f"{render_rate:.0f}")
+        else:
+            self.metric_dirty_rendered.setText("—")
+        if isinstance(cur_rendered, (int, float)):
+            self._prev_dirty_rendered = int(cur_rendered)
+            self._prev_dirty_poll_ts = now_ts
+
         if isinstance(uptime_s, (int, float)):
             uptime_i = int(uptime_s)
             h, rem = divmod(uptime_i, 3600)
