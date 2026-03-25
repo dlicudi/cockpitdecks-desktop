@@ -21,6 +21,7 @@ LAUNCH_ENV_KEYS = (
 DEFAULTS: dict[str, str] = {
     "SIMULATOR_HOME": "",
     "COCKPITDECKS_PATH": "",
+    "COCKPITDECKS_TARGET": "",
     "SIMULATOR_HOST": "",
     "API_HOST": "127.0.0.1",
     "API_PORT": "8086",
@@ -28,6 +29,8 @@ DEFAULTS: dict[str, str] = {
     "COCKPIT_WEB_PORT": "7777",
     # Desktop app only: optional path to cockpitdecks-launcher (empty = bundled or dev default).
     "COCKPITDECKS_LAUNCHER_PATH": "",
+    # Desktop app only: optional file to append launcher/Cockpitdecks stdout/stderr.
+    "COCKPITDECKS_LAUNCH_LOG_PATH": "",
 }
 
 

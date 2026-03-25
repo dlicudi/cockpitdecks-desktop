@@ -39,6 +39,7 @@ class SettingsFormWidget(QWidget):
         intro = QLabel(
             "<b>Launcher</b> — optional full path to <code>cockpitdecks-launcher</code>. "
             "Leave empty to use the bundled binary (frozen app) or <code>…/cockpitdecks/dist/cockpitdecks-launcher</code> in dev.<br><br>"
+            "<b>Launch log</b> — optional file path where the desktop app appends the launcher / Cockpitdecks output it already shows on the Logs tab.<br><br>"
             "<b>Launch environment</b> (passed to cockpitdecks-launcher): "
             "<code>SIMULATOR_HOME</code>, <code>COCKPITDECKS_PATH</code> (extra roots where Cockpitdecks looks for aircraft "
             "folders containing <code>deckconfig</code>), optional <code>SIMULATOR_HOST</code>, "
@@ -56,6 +57,14 @@ class SettingsFormWidget(QWidget):
         row_launcher = QHBoxLayout()
         row_launcher.addWidget(self.ed_launcher, 1)
         row_launcher.addWidget(btn_launcher)
+
+        self.ed_launch_log = QLineEdit(data.get("COCKPITDECKS_LAUNCH_LOG_PATH", ""))
+        self.ed_launch_log.setPlaceholderText("Optional — append launcher output to this file")
+        btn_launch_log = QPushButton("Browse…")
+        btn_launch_log.clicked.connect(self._browse_launch_log)
+        row_launch_log = QHBoxLayout()
+        row_launch_log.addWidget(self.ed_launch_log, 1)
+        row_launch_log.addWidget(btn_launch_log)
 
         self.ed_xp_home = QLineEdit(data.get("SIMULATOR_HOME", ""))
         btn_browse = QPushButton("Browse…")
@@ -102,6 +111,7 @@ class SettingsFormWidget(QWidget):
 
         form = QFormLayout()
         form.addRow("cockpitdecks-launcher path (optional)", row_launcher)
+        form.addRow("Launch log path (optional)", row_launch_log)
         form.addRow("SIMULATOR_HOME (X-Plane install)", row_xp)
         form.addRow("COCKPITDECKS_PATH (deck search roots)", cd_wrap)
         form.addRow("SIMULATOR_HOST (optional, remote)", self.ed_sim_host)
@@ -121,6 +131,7 @@ class SettingsFormWidget(QWidget):
 
         for ed in (
             self.ed_launcher,
+            self.ed_launch_log,
             self.ed_xp_home,
             self.ed_sim_host,
             self.ed_api_host,
@@ -162,6 +173,16 @@ class SettingsFormWidget(QWidget):
         if path:
             self.ed_launcher.setText(path)
 
+    def _browse_launch_log(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select launch log file",
+            str(Path.home() / "cockpitdecks-launch.log"),
+            "Log files (*.log *.txt);;All files (*)",
+        )
+        if path:
+            self.ed_launch_log.setText(path)
+
     def _browse_xp(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "Select X-Plane installation folder", str(Path.home()))
         if d:
@@ -197,6 +218,7 @@ class SettingsFormWidget(QWidget):
         data = desktop_settings.load()
         pairs: list[tuple[QLineEdit, str]] = [
             (self.ed_launcher, data.get("COCKPITDECKS_LAUNCHER_PATH", "")),
+            (self.ed_launch_log, data.get("COCKPITDECKS_LAUNCH_LOG_PATH", "")),
             (self.ed_xp_home, data.get("SIMULATOR_HOME", "")),
             (self.ed_sim_host, data.get("SIMULATOR_HOST", "")),
             (self.ed_api_host, data.get("API_HOST", "127.0.0.1")),
@@ -216,6 +238,7 @@ class SettingsFormWidget(QWidget):
         stored_cd = ":".join(p for p in paths if p)
         return {
             "COCKPITDECKS_LAUNCHER_PATH": self.ed_launcher.text().strip(),
+            "COCKPITDECKS_LAUNCH_LOG_PATH": self.ed_launch_log.text().strip(),
             "SIMULATOR_HOME": self.ed_xp_home.text().strip(),
             "COCKPITDECKS_PATH": stored_cd,
             "SIMULATOR_HOST": self.ed_sim_host.text().strip(),

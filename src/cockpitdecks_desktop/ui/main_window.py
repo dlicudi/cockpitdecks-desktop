@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import html as html_mod
 import importlib.metadata
+import json
 import os
 from pathlib import Path
 import re
@@ -16,11 +17,14 @@ from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QProgressBar,
     QPushButton,
@@ -38,6 +42,7 @@ from cockpitdecks_desktop.services.desktop_settings import (
     launcher_binary_path,
     load as load_desktop_settings,
     launch_env_overlay,
+    save as save_desktop_settings,
     settings_path,
     xplane_rest_base,
 )
@@ -60,6 +65,20 @@ class CommandStep:
     title: str
     command: str
     cwd: Path
+
+
+@dataclass
+class LaunchTargetInfo:
+    aircraft_name: str
+    path: str
+    root: str
+    deck_count: int
+    deck_names: list[str]
+    config_ok: bool
+    config_error: str = ""
+    docs_title: str = ""
+    docs_summary: str = ""
+    docs_path: str = ""
 
 
 def _shorten_filesystem_path(path: Path | str, *, max_len: int = 72) -> str:
@@ -108,6 +127,8 @@ class MainWindow(QMainWindow):
         self._launcher_process = None
         self._launcher_log_thread: threading.Thread | None = None
         self._live_poll_lock = threading.Lock()
+        self._launch_targets: list[LaunchTargetInfo] = []
+        self._last_launcher_exit_code: int | None = None
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -125,11 +146,31 @@ class MainWindow(QMainWindow):
         self.info_live_poll_at = QLabel("—")
         self.info_last_check = QLabel("—")
         self.info_runtime_metrics = QLabel("—")
+        self.info_diag_warning = QLabel("—")
+        self.diag_health_launcher = QLabel("—")
+        self.diag_health_cockpit = QLabel("—")
+        self.diag_health_xplane = QLabel("—")
+        self.diag_health_runtime = QLabel("—")
+        self.diag_launcher_path = QLabel("—")
+        self.diag_launch_log_path = QLabel("—")
+        self.diag_crash_log_path = QLabel("—")
+        self.diag_target = QLabel("—")
+        self.diag_session = QLabel("—")
+        self.diag_web = QLabel("—")
+        self.diag_xplane = QLabel("—")
+        self.diag_metrics = QLabel("—")
+        self.diag_last_exit = QLabel("—")
+        self.diag_runtime_rates = QLabel("—")
+        self.diag_runtime_batching = QLabel("—")
         _val_style = "font-size: 13px; border: none; padding: 0;"
         for lab in (
             self.info_desktop, self.info_launcher, self.info_xplane,
             self.info_cockpit_web, self.info_session, self.info_live_poll_at,
-            self.info_last_check, self.info_runtime_metrics,
+            self.info_last_check, self.info_runtime_metrics, self.info_diag_warning,
+            self.diag_health_launcher, self.diag_health_cockpit, self.diag_health_xplane, self.diag_health_runtime,
+            self.diag_launcher_path, self.diag_launch_log_path, self.diag_crash_log_path, self.diag_target,
+            self.diag_session, self.diag_web, self.diag_xplane, self.diag_metrics, self.diag_last_exit,
+            self.diag_runtime_rates, self.diag_runtime_batching,
         ):
             lab.setWordWrap(False)
             lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -205,10 +246,11 @@ class MainWindow(QMainWindow):
         self.btn_stop.setObjectName("stopButton")
         self.btn_reload = QPushButton("Reload")
         self.btn_refresh = QPushButton("Refresh")
-        self.btn_check = QPushButton("Preflight")
+        self.btn_check = QPushButton("Check")
+        self.btn_export_diag = QPushButton("Export")
         self.btn_update = QPushButton("Updates")
         for b in (self.btn_start, self.btn_restart, self.btn_stop,
-                  self.btn_reload, self.btn_refresh, self.btn_check, self.btn_update):
+                  self.btn_reload, self.btn_refresh, self.btn_check, self.btn_export_diag, self.btn_update):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
 
         ab_layout.addWidget(self.btn_start)
@@ -221,6 +263,7 @@ class MainWindow(QMainWindow):
         ab_layout.addWidget(ab_sep)
         ab_layout.addWidget(self.btn_refresh)
         ab_layout.addWidget(self.btn_check)
+        ab_layout.addWidget(self.btn_export_diag)
         ab_layout.addWidget(self.btn_update)
         ab_layout.addStretch(1)
 
@@ -370,15 +413,24 @@ class MainWindow(QMainWindow):
         self.metric_dataref_rate = QLabel("—")
         self.metric_queue_depth = QLabel("—")
         self.metric_dirty_rendered = QLabel("—")
+        self.metric_ws_rate = QLabel("—")
+        self.metric_marks_per_flush = QLabel("—")
         self.metric_uptime = QLabel("—")
         self._prev_dataref_values_processed: int | None = None
         self._prev_dataref_poll_ts: float | None = None
         self._prev_dirty_rendered: int | None = None
         self._prev_dirty_poll_ts: float | None = None
+        self._prev_ws_messages_received: int | None = None
+        self._prev_dirty_marks: int | None = None
+        self._prev_dirty_flushes: int | None = None
+        self._prev_rate_poll_ts: float | None = None
+        self._last_session_info: SessionInfo | None = None
+        self._last_metrics_obj: dict | None = None
         _counter_val_qss = "font-size: 20px; font-weight: 700; color: #1e293b; border: none;"
         _counter_lbl_qss = "font-size: 11px; color: #6b7280; border: none;"
         for cv in (self.metric_threads, self.metric_variables, self.metric_datarefs,
-                   self.metric_dataref_rate, self.metric_queue_depth, self.metric_dirty_rendered, self.metric_uptime):
+                   self.metric_dataref_rate, self.metric_queue_depth, self.metric_dirty_rendered,
+                   self.metric_ws_rate, self.metric_marks_per_flush, self.metric_uptime):
             cv.setStyleSheet(_counter_val_qss)
             cv.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -391,6 +443,8 @@ class MainWindow(QMainWindow):
             (self.metric_dataref_rate, "Dataref/s"),
             (self.metric_queue_depth, "Queue"),
             (self.metric_dirty_rendered, "Render/s"),
+            (self.metric_ws_rate, "WS msg/s"),
+            (self.metric_marks_per_flush, "Marks/flush"),
             (self.metric_uptime, "Uptime"),
         ]
         _cols = 4
@@ -422,6 +476,10 @@ class MainWindow(QMainWindow):
         diag_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280; border: none;")
         diag_layout.addWidget(diag_lbl)
         diag_layout.addWidget(self.info_last_check, 1)
+        diag_warn_lbl = QLabel("Diagnostics")
+        diag_warn_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280; border: none;")
+        diag_layout.addWidget(diag_warn_lbl)
+        diag_layout.addWidget(self.info_diag_warning, 2)
 
         # ════════════════════════════════════════
         #  ASSEMBLE STATUS TAB
@@ -465,6 +523,139 @@ class MainWindow(QMainWindow):
         settings_scroll.setFrameShape(QFrame.NoFrame)
         settings_scroll.setWidget(self.settings_form)
         tab_config_layout.addWidget(settings_scroll, 1)
+
+        # ════════════════════════════════════════
+        #  DIAGNOSTICS TAB
+        # ════════════════════════════════════════
+        tab_diag = QWidget()
+        tab_diag_layout = QVBoxLayout(tab_diag)
+        tab_diag_layout.setContentsMargins(0, 0, 0, 0)
+        tab_diag_layout.setSpacing(0)
+
+        diag_inner = QWidget()
+        di = QVBoxLayout(diag_inner)
+        di.setContentsMargins(20, 16, 20, 20)
+        di.setSpacing(12)
+
+        diag_intro = QLabel(
+            "Operational diagnostics for launcher startup, Cockpitdecks connectivity, X-Plane API reachability, "
+            "and runtime pressure. Use this tab when the app is slow, disconnected, or failing to start."
+        )
+        diag_intro.setWordWrap(True)
+        diag_intro.setStyleSheet("font-size: 13px; color: #475569; border: none;")
+        di.addWidget(diag_intro)
+
+        startup_card = _card(bg="#fafafa", border="#e5e7eb")
+        startup_layout = QVBoxLayout(startup_card)
+        startup_layout.setContentsMargins(16, 14, 16, 14)
+        startup_layout.setSpacing(8)
+        startup_layout.addWidget(_section_heading("Startup"))
+        startup_layout.addWidget(_kv_row("Launcher", self.diag_launcher_path))
+        startup_layout.addWidget(_kv_row("Target", self.diag_target))
+        startup_layout.addWidget(_kv_row("Launch Log", self.diag_launch_log_path))
+        startup_layout.addWidget(_kv_row("Crash Log", self.diag_crash_log_path))
+        startup_layout.addWidget(_kv_row("Last Exit", self.diag_last_exit))
+        di.addWidget(startup_card)
+
+        probe_card = _card()
+        probe_layout = QVBoxLayout(probe_card)
+        probe_layout.setContentsMargins(16, 14, 16, 14)
+        probe_layout.setSpacing(8)
+        probe_layout.addWidget(_section_heading("Checks"))
+        probe_layout.addWidget(_kv_row("Cockpit Web", self.diag_web))
+        probe_layout.addWidget(_kv_row("/desktop-status", self.diag_session))
+        probe_layout.addWidget(_kv_row("/desktop-metrics", self.diag_metrics))
+        probe_layout.addWidget(_kv_row("X-Plane API", self.diag_xplane))
+        di.addWidget(probe_card)
+
+        runtime_card = _card()
+        runtime_layout = QVBoxLayout(runtime_card)
+        runtime_layout.setContentsMargins(16, 14, 16, 14)
+        runtime_layout.setSpacing(8)
+        runtime_layout.addWidget(_section_heading("Runtime Pressure"))
+        runtime_layout.addWidget(_kv_row("Summary", self.diag_health_runtime))
+        runtime_layout.addWidget(_kv_row("Rates", self.diag_runtime_rates))
+        runtime_layout.addWidget(_kv_row("Batching", self.diag_runtime_batching))
+        runtime_layout.addWidget(_kv_row("Last Check", self.info_last_check))
+        di.addWidget(runtime_card)
+
+        actions_card = _card(bg="#fafafa", border="#e5e7eb")
+        actions_layout = QVBoxLayout(actions_card)
+        actions_layout.setContentsMargins(16, 14, 16, 14)
+        actions_layout.setSpacing(10)
+        actions_layout.addWidget(_section_heading("Actions"))
+        diag_actions = QHBoxLayout()
+        diag_actions.setSpacing(8)
+        self.btn_diag_refresh = QPushButton("Refresh Status")
+        self.btn_diag_check = QPushButton("Run Checks")
+        self.btn_diag_export = QPushButton("Export Bundle")
+        for b in (self.btn_diag_refresh, self.btn_diag_check, self.btn_diag_export):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            diag_actions.addWidget(b)
+        diag_actions.addStretch(1)
+        actions_layout.addLayout(diag_actions)
+        di.addWidget(actions_card)
+
+        diag_scroll = QScrollArea()
+        diag_scroll.setWidgetResizable(True)
+        diag_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        diag_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        diag_scroll.setWidget(diag_inner)
+        tab_diag_layout.addWidget(diag_scroll, 1)
+
+        # ════════════════════════════════════════
+        #  DECKS TAB
+        # ════════════════════════════════════════
+        tab_decks = QWidget()
+        tab_decks_layout = QVBoxLayout(tab_decks)
+        tab_decks_layout.setContentsMargins(12, 12, 12, 12)
+        tab_decks_layout.setSpacing(10)
+
+        decks_intro = QLabel(
+            "Available aircraft targets discovered from <code>COCKPITDECKS_PATH</code>. "
+            "Select one to make it the default launch target, or launch directly from here."
+        )
+        decks_intro.setWordWrap(True)
+        decks_intro.setStyleSheet("font-size: 13px; color: #475569; border: none;")
+        tab_decks_layout.addWidget(decks_intro)
+
+        decks_toolbar = QHBoxLayout()
+        decks_toolbar.setSpacing(8)
+        self.ed_decks_filter = QLineEdit()
+        self.ed_decks_filter.setPlaceholderText("Filter by aircraft, deck name, or path…")
+        self.launch_target_combo = QComboBox()
+        self.launch_target_combo.setMinimumWidth(220)
+        self.launch_target_combo.setToolTip("Optional aircraft/deckconfig target discovered from COCKPITDECKS_PATH.")
+        self.btn_decks_refresh = QPushButton("Refresh List")
+        self.btn_decks_use_auto = QPushButton("Use Auto")
+        self.btn_decks_select = QPushButton("Use Selected")
+        self.btn_decks_launch = QPushButton("Launch Selected")
+        self.btn_decks_reveal = QPushButton("Reveal Folder")
+        for b in (self.btn_decks_refresh, self.btn_decks_use_auto, self.btn_decks_select, self.btn_decks_launch, self.btn_decks_reveal):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+        decks_toolbar.addWidget(self.ed_decks_filter, 1)
+        decks_toolbar.addWidget(QLabel("Target"))
+        decks_toolbar.addWidget(self.launch_target_combo)
+        decks_toolbar.addWidget(self.btn_decks_refresh)
+        decks_toolbar.addWidget(self.btn_decks_use_auto)
+        decks_toolbar.addWidget(self.btn_decks_select)
+        decks_toolbar.addWidget(self.btn_decks_launch)
+        decks_toolbar.addWidget(self.btn_decks_reveal)
+        tab_decks_layout.addLayout(decks_toolbar)
+
+        self.decks_list = QListWidget()
+        self.decks_list.setAlternatingRowColors(True)
+        self.decks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.decks_list.setStyleSheet(
+            "QListWidget { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 4px; }"
+            "QListWidget::item { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }"
+            "QListWidget::item:selected { background: #eff6ff; color: #0f172a; border: 1px solid #bfdbfe; }"
+        )
+        tab_decks_layout.addWidget(self.decks_list, 1)
+
+        self.decks_summary = QLabel("No targets discovered yet.")
+        self.decks_summary.setStyleSheet("font-size: 12px; color: #64748b; border: none;")
+        tab_decks_layout.addWidget(self.decks_summary)
 
         # ════════════════════════════════════════
         #  LOGS TAB
@@ -558,6 +749,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
         self.tabs.addTab(tab_config, "Config")
+        self.tabs.addTab(tab_diag, "Diagnostics")
+        self.tabs.addTab(tab_decks, "Decks")
         self.tabs.addTab(tab_logs, "Logs")
 
         root.addWidget(header)
@@ -571,16 +764,29 @@ class MainWindow(QMainWindow):
         # ── Connections ──
         self.btn_refresh.clicked.connect(self.refresh_info_panel)
         self.btn_check.clicked.connect(self.run_preflight)
+        self.btn_export_diag.clicked.connect(self.export_diagnostics_bundle)
+        self.btn_diag_refresh.clicked.connect(self.refresh_info_panel)
+        self.btn_diag_check.clicked.connect(self.run_preflight)
+        self.btn_diag_export.clicked.connect(self.export_diagnostics_bundle)
         self.btn_update.clicked.connect(self.check_updates)
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
         self.btn_stop.clicked.connect(self.stop_cockpitdecks)
         self.btn_reload.clicked.connect(self.reload_decks)
+        self.btn_decks_refresh.clicked.connect(self._refresh_launch_targets)
+        self.btn_decks_use_auto.clicked.connect(self._use_auto_launch_target)
+        self.btn_decks_select.clicked.connect(self._use_selected_decks_target)
+        self.btn_decks_launch.clicked.connect(self._launch_selected_decks_target)
+        self.btn_decks_reveal.clicked.connect(self._reveal_selected_decks_target)
         self.btn_clear_logs.clicked.connect(self.log.clear)
         self.btn_copy_logs.clicked.connect(self._copy_log_selection)
         self.log_line.connect(self._append)
         self.live_poll_done.connect(self._apply_live_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
+        self.launch_target_combo.currentIndexChanged.connect(self._on_launch_target_changed)
+        self.ed_decks_filter.textChanged.connect(self._populate_decks_list)
+        self.decks_list.itemSelectionChanged.connect(self._update_decks_actions)
+        self.decks_list.itemDoubleClicked.connect(lambda _item: self._launch_selected_decks_target())
 
         self.log.setAlignment(Qt.AlignTop)
         self.setStyleSheet(MAIN_WINDOW_QSS)
@@ -592,6 +798,7 @@ class MainWindow(QMainWindow):
         find_shortcut.activated.connect(self._log_search_toggle)
         esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self._log_search_bar)
         esc_shortcut.activated.connect(self._log_search_close)
+        self._refresh_launch_targets()
         self.refresh_info_panel()
         self._live_timer = QTimer(self)
         self._live_timer.timeout.connect(self._schedule_live_poll)
@@ -837,6 +1044,371 @@ class MainWindow(QMainWindow):
     def _repo(self, name: str) -> Path:
         return self._workspace() / name
 
+    def _settings_with_updates(self, **updates: str) -> dict[str, str]:
+        settings = load_desktop_settings()
+        settings.update({k: v for k, v in updates.items()})
+        return settings
+
+    def _configured_launch_target(self) -> str:
+        return (load_desktop_settings().get("COCKPITDECKS_TARGET") or "").strip()
+
+    def _launch_log_path(self) -> Path | None:
+        raw = (load_desktop_settings().get("COCKPITDECKS_LAUNCH_LOG_PATH") or "").strip()
+        return Path(raw).expanduser() if raw else None
+
+    def _crash_log_path(self) -> Path:
+        return settings_path().with_name("crash.log")
+
+    def _cockpitdecks_search_roots(self) -> list[Path]:
+        raw = (load_desktop_settings().get("COCKPITDECKS_PATH") or "").strip()
+        roots: list[Path] = []
+        seen: set[str] = set()
+        for chunk in raw.replace(";", ":").split(":"):
+            s = chunk.strip()
+            if not s:
+                continue
+            p = Path(s).expanduser()
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            if p.is_dir():
+                roots.append(p)
+        return roots
+
+    def _parse_simple_yaml_meta(self, path: Path) -> dict[str, str]:
+        out: dict[str, str] = {}
+        current_multiline: str | None = None
+        multiline_parts: list[str] = []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return out
+        for raw in lines:
+            if current_multiline is not None:
+                if raw.startswith(" ") or raw.startswith("\t"):
+                    multiline_parts.append(raw.strip())
+                    continue
+                out[current_multiline] = " ".join(part for part in multiline_parts if part).strip()
+                current_multiline = None
+                multiline_parts = []
+            s = raw.strip()
+            if not s or s.startswith("#") or ":" not in s:
+                continue
+            key, value = s.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            if value in {">", "|"}:
+                current_multiline = key
+                multiline_parts = []
+                continue
+            out[key] = value.strip("'\"")
+        if current_multiline is not None:
+            out[current_multiline] = " ".join(part for part in multiline_parts if part).strip()
+        return out
+
+    def _parse_target_metadata(self, aircraft_dir: Path, root: Path) -> LaunchTargetInfo:
+        config_path = aircraft_dir / "deckconfig" / "config.yaml"
+        aircraft_name = aircraft_dir.name
+        deck_names: list[str] = []
+        deck_layouts: list[tuple[str, str]] = []
+        config_ok = True
+        config_error = ""
+        docs_title = ""
+        docs_summary = ""
+        docs_path = ""
+        inside_decks = False
+        decks_indent = 0
+        current_deck_name = ""
+
+        try:
+            lines = config_path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            return LaunchTargetInfo(
+                aircraft_name=aircraft_name,
+                path=str(aircraft_dir),
+                root=str(root),
+                deck_count=0,
+                deck_names=[],
+                config_ok=False,
+                config_error=str(exc),
+            )
+
+        for raw in lines:
+            if not raw.strip() or raw.lstrip().startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip(" "))
+            stripped = raw.strip()
+            if stripped.startswith("aircraft:"):
+                value = stripped.split(":", 1)[1].strip()
+                if value:
+                    aircraft_name = value.strip("'\"")
+                continue
+            if stripped == "decks:":
+                inside_decks = True
+                decks_indent = indent
+                continue
+            if inside_decks and indent <= decks_indent and not stripped.startswith("- "):
+                inside_decks = False
+            if inside_decks and stripped.startswith("- name:"):
+                value = stripped.split(":", 1)[1].strip()
+                if value:
+                    current_deck_name = value.strip("'\"")
+                    deck_names.append(current_deck_name)
+                continue
+            if inside_decks and stripped.startswith("layout:"):
+                value = stripped.split(":", 1)[1].strip()
+                if value and current_deck_name:
+                    deck_layouts.append((current_deck_name, value.strip("'\"")))
+
+        if not deck_names:
+            config_ok = False
+            config_error = "no deck entries found"
+
+        docs_snippets: list[str] = []
+        docs_notes: list[str] = []
+        for deck_name, layout_name in deck_layouts:
+            docs_file = aircraft_dir / "deckconfig" / layout_name / "_docs.yaml"
+            if not docs_file.is_file():
+                continue
+            meta = self._parse_simple_yaml_meta(docs_file)
+            status = (meta.get("status") or "").strip()
+            notes = (meta.get("notes") or "").strip()
+            if status:
+                docs_snippets.append(f"{deck_name}: {status}")
+            if notes:
+                docs_notes.append(notes)
+            if not docs_path:
+                docs_path = str(docs_file)
+        if docs_snippets:
+            docs_title = "Deck Docs"
+            docs_summary = " | ".join(docs_snippets[:3])
+            if len(docs_snippets) > 3:
+                docs_summary += " | …"
+            if docs_notes:
+                docs_summary += f" | {docs_notes[0]}"
+
+        return LaunchTargetInfo(
+            aircraft_name=aircraft_name,
+            path=str(aircraft_dir),
+            root=str(root),
+            deck_count=len(deck_names),
+            deck_names=deck_names,
+            config_ok=config_ok,
+            config_error=config_error,
+            docs_title=docs_title,
+            docs_summary=docs_summary,
+            docs_path=docs_path,
+        )
+
+    def _launch_target_label(self, info: LaunchTargetInfo) -> str:
+        root = Path(info.root)
+        path = Path(info.path)
+        try:
+            rel_disp = path.relative_to(root).as_posix()
+        except ValueError:
+            rel_disp = path.name
+        return f"{info.aircraft_name}  ·  {_shorten_filesystem_path(root / rel_disp, max_len=78)}"
+
+    def _discover_launch_targets(self) -> list[LaunchTargetInfo]:
+        targets: list[LaunchTargetInfo] = []
+        seen: set[str] = set()
+        for root in self._cockpitdecks_search_roots():
+            try:
+                deckconfigs = sorted(root.rglob("deckconfig"))
+            except OSError:
+                continue
+            for deckconfig_dir in deckconfigs:
+                if not deckconfig_dir.is_dir() or not (deckconfig_dir / "config.yaml").exists():
+                    continue
+                aircraft_dir = deckconfig_dir.parent
+                try:
+                    resolved = str(aircraft_dir.resolve())
+                except OSError:
+                    resolved = str(aircraft_dir)
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                targets.append(self._parse_target_metadata(Path(resolved), root))
+        targets.sort(key=lambda item: (item.aircraft_name.lower(), item.path.lower()))
+        return targets
+
+    def _refresh_launch_targets(self) -> None:
+        selected = self.launch_target_combo.currentData() or self._configured_launch_target()
+        self._launch_targets = self._discover_launch_targets()
+
+        self.launch_target_combo.blockSignals(True)
+        self.launch_target_combo.clear()
+        self.launch_target_combo.addItem("Auto / simulator-selected", "")
+        for info in self._launch_targets:
+            self.launch_target_combo.addItem(self._launch_target_label(info), info.path)
+
+        index = 0
+        if selected:
+            for idx in range(1, self.launch_target_combo.count()):
+                if self.launch_target_combo.itemData(idx) == selected:
+                    index = idx
+                    break
+            else:
+                missing_label = f"Missing target  ·  {_shorten_filesystem_path(selected, max_len=78)}"
+                self.launch_target_combo.addItem(missing_label, selected)
+                index = self.launch_target_combo.count() - 1
+        self.launch_target_combo.setCurrentIndex(index)
+        self.launch_target_combo.blockSignals(False)
+
+        found = len(self._launch_targets)
+        roots = len(self._cockpitdecks_search_roots())
+        self.launch_target_combo.setToolTip(
+            f"Optional aircraft/deckconfig target discovered from COCKPITDECKS_PATH.\n"
+            f"Found {found} target(s) across {roots} search root(s)."
+        )
+        self._populate_decks_list()
+
+    def _selected_launch_target(self) -> Path | None:
+        raw = (self.launch_target_combo.currentData() or "").strip()
+        return Path(raw) if raw else None
+
+    def _on_launch_target_changed(self, _index: int) -> None:
+        selected = (self.launch_target_combo.currentData() or "").strip()
+        save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=selected))
+        self._select_decks_item_by_path(selected)
+        self.refresh_info_panel()
+
+    def _decks_filter_text(self) -> str:
+        return self.ed_decks_filter.text().strip().lower() if hasattr(self, "ed_decks_filter") else ""
+
+    def _matching_launch_targets(self) -> list[LaunchTargetInfo]:
+        query = self._decks_filter_text()
+        if not query:
+            return list(self._launch_targets)
+        matches: list[LaunchTargetInfo] = []
+        for info in self._launch_targets:
+            haystacks = [
+                info.aircraft_name.lower(),
+                info.path.lower(),
+                " ".join(name.lower() for name in info.deck_names),
+            ]
+            if any(query in hay for hay in haystacks):
+                matches.append(info)
+        return matches
+
+    def _render_target_item_text(self, info: LaunchTargetInfo) -> str:
+        deck_desc = ", ".join(info.deck_names[:4]) if info.deck_names else "No deck names parsed"
+        if len(info.deck_names) > 4:
+            deck_desc += "…"
+        status = "Ready" if info.config_ok else f"Needs review ({info.config_error})"
+        text = (
+            f"{info.aircraft_name}\n"
+            f"{info.deck_count} deck(s)  |  {deck_desc}\n"
+            f"{_shorten_filesystem_path(info.path, max_len=100)}\n"
+            f"{status}"
+        )
+        if info.docs_summary:
+            text += f"\nDocs: {info.docs_summary}"
+        return text
+
+    def _populate_decks_list(self) -> None:
+        if not hasattr(self, "decks_list"):
+            return
+        selected = self._selected_launch_target()
+        selected_path = str(selected) if selected is not None else ""
+        self.decks_list.clear()
+        matching = self._matching_launch_targets()
+        for info in matching:
+            item = QListWidgetItem(self._render_target_item_text(info))
+            item.setData(Qt.ItemDataRole.UserRole, info.path)
+            item.setToolTip(
+                f"Aircraft: {info.aircraft_name}\n"
+                f"Decks: {', '.join(info.deck_names) if info.deck_names else '—'}\n"
+                f"Path: {info.path}"
+                + (f"\nDocs: {info.docs_summary}" if info.docs_summary else "")
+                + (f"\nDocs file: {info.docs_path}" if info.docs_path else "")
+            )
+            self.decks_list.addItem(item)
+        self._select_decks_item_by_path(selected_path)
+        total = len(self._launch_targets)
+        shown = len(matching)
+        self.decks_summary.setText(f"{shown} shown / {total} discovered")
+        self._update_decks_actions()
+
+    def _select_decks_item_by_path(self, path: str) -> None:
+        if not hasattr(self, "decks_list"):
+            return
+        self.decks_list.blockSignals(True)
+        self.decks_list.clearSelection()
+        if path:
+            for idx in range(self.decks_list.count()):
+                item = self.decks_list.item(idx)
+                if item.data(Qt.ItemDataRole.UserRole) == path:
+                    item.setSelected(True)
+                    self.decks_list.setCurrentItem(item)
+                    break
+        self.decks_list.blockSignals(False)
+        self._update_decks_actions()
+
+    def _selected_decks_target_path(self) -> str:
+        item = self.decks_list.currentItem() if hasattr(self, "decks_list") else None
+        if item is None:
+            return ""
+        return str(item.data(Qt.ItemDataRole.UserRole) or "")
+
+    def _update_decks_actions(self) -> None:
+        if not hasattr(self, "btn_decks_select"):
+            return
+        selected = self._selected_decks_target_path()
+        has_selected = bool(selected)
+        self.btn_decks_select.setEnabled(has_selected)
+        self.btn_decks_launch.setEnabled(has_selected and not self._command_worker_busy())
+        self.btn_decks_reveal.setEnabled(has_selected)
+
+    def _select_launch_target(self, path: str) -> None:
+        self.launch_target_combo.blockSignals(True)
+        index = 0
+        if path:
+            for idx in range(1, self.launch_target_combo.count()):
+                if self.launch_target_combo.itemData(idx) == path:
+                    index = idx
+                    break
+        self.launch_target_combo.setCurrentIndex(index)
+        self.launch_target_combo.blockSignals(False)
+        save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=path))
+        self._select_decks_item_by_path(path)
+        self.refresh_info_panel()
+
+    def _use_selected_decks_target(self) -> None:
+        path = self._selected_decks_target_path()
+        if not path:
+            return
+        self._select_launch_target(path)
+        self._append(f"[ok] selected launch target: {path}")
+
+    def _use_auto_launch_target(self) -> None:
+        self._select_launch_target("")
+        self._append("[ok] launch target cleared; using auto / simulator-selected mode")
+
+    def _launch_selected_decks_target(self) -> None:
+        path = self._selected_decks_target_path()
+        if not path:
+            return
+        self._select_launch_target(path)
+        self.start_cockpitdecks()
+
+    def _reveal_selected_decks_target(self) -> None:
+        path = self._selected_decks_target_path()
+        if not path:
+            return
+        target = Path(path)
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)])
+            elif sys.platform == "win32":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
+            self._append(f"[ok] revealed target folder: {target}")
+        except OSError as exc:
+            self._append(f"[error] could not reveal target folder {target}: {exc}")
+
     def _resolve_launcher_binary(self) -> Path:
         """Resolve cockpitdecks-launcher: Config override, else bundled (frozen), else dev dist."""
         override = launcher_binary_path(load_desktop_settings())
@@ -965,6 +1537,7 @@ class MainWindow(QMainWindow):
 
     def _on_settings_saved(self) -> None:
         self.statusBar().showMessage(f"Settings saved — {settings_path().name}", 4000)
+        self._refresh_launch_targets()
         self.refresh_info_panel()
 
     def _desktop_app_version(self) -> str:
@@ -1014,6 +1587,151 @@ class MainWindow(QMainWindow):
         c = colors.get(state, "#94a3b8")
         dot.setStyleSheet(f"background-color: {c}; border-radius: 5px; border: none;")
 
+    def _set_diag_warning(self, text: str, level: str = "neutral") -> None:
+        self.info_diag_warning.setText(text)
+        styles = {
+            "neutral": "font-size: 13px; color: #334155; border: none; padding: 0;",
+            "ok": "font-size: 13px; color: #166534; border: none; padding: 0; font-weight: 500;",
+            "warn": "font-size: 13px; color: #b45309; border: none; padding: 0; font-weight: 500;",
+            "error": "font-size: 13px; color: #991b1b; border: none; padding: 0; font-weight: 500;",
+        }
+        self.info_diag_warning.setStyleSheet(styles.get(level, styles["neutral"]))
+        self.diag_health_runtime.setText(text)
+        self._style_status_value(self.diag_health_runtime, text)
+
+    def _update_diagnostics_warning(self, metrics: dict | None) -> None:
+        if not isinstance(metrics, dict):
+            self._set_diag_warning("—", "neutral")
+            return
+        cockpit = metrics.get("cockpit") if isinstance(metrics.get("cockpit"), dict) else {}
+        queue_depth = cockpit.get("event_queue_depth")
+        dirty_marks = cockpit.get("dirty_marks")
+        dirty_flushes = cockpit.get("dirty_flushes")
+        dirty_rendered = cockpit.get("dirty_rendered")
+
+        if isinstance(queue_depth, int) and queue_depth >= 100:
+            self._set_diag_warning(f"Queue backlog high: {queue_depth}", "error")
+            return
+        if isinstance(queue_depth, int) and queue_depth >= 30:
+            self._set_diag_warning(f"Queue backlog building: {queue_depth}", "warn")
+            return
+        if isinstance(dirty_marks, int) and isinstance(dirty_flushes, int) and dirty_marks > 0 and dirty_flushes == 0:
+            self._set_diag_warning("Dirty buttons marked but no flushes yet", "warn")
+            return
+        if isinstance(dirty_rendered, int) and dirty_rendered == 0 and isinstance(dirty_marks, int) and dirty_marks > 0:
+            self._set_diag_warning("Marks arriving without rendered output", "warn")
+            return
+        self._set_diag_warning("Queue and render pipeline look stable", "ok")
+
+    def _refresh_diagnostics_panel(self) -> None:
+        settings = load_desktop_settings()
+        launcher = self._resolve_launcher_binary()
+        launch_log = self._launch_log_path()
+        crash_log = self._crash_log_path()
+        target = self._selected_launch_target()
+        launcher_running = self._launcher_is_running()
+        listener = self._cockpit_web_port_listener()
+        web_base = cockpit_web_base(settings)
+        xp_base = xplane_rest_base(settings)
+
+        if not launcher.exists():
+            launcher_health = "Missing"
+        elif launcher_running:
+            launcher_health = "Running"
+        elif self._last_launcher_exit_code not in (None, 0):
+            launcher_health = f"Exited ({self._last_launcher_exit_code})"
+        elif listener is not None:
+            launcher_health = f"Ready / port {self._web_listen_port()} in use"
+        else:
+            launcher_health = "Ready"
+
+        cockpit_health = self.info_cockpit_web.text()
+        if self._last_session_info is not None and self._last_session_info.ok:
+            cockpit_health = f"OK | {self._last_session_info.aircraft}"
+
+        self.diag_health_launcher.setText(launcher_health)
+        self.diag_health_cockpit.setText(cockpit_health)
+        self.diag_health_xplane.setText(self.info_xplane.text())
+
+        self.diag_launcher_path.setText(f"{launcher_health} | {_shorten_filesystem_path(launcher, max_len=80)}")
+        self.diag_launch_log_path.setText(_shorten_filesystem_path(launch_log, max_len=96) if launch_log else "Not configured")
+        self.diag_crash_log_path.setText(
+            f"{_shorten_filesystem_path(crash_log, max_len=80)}"
+            + (" | present" if crash_log.exists() else " | none yet")
+        )
+        self.diag_target.setText(_shorten_filesystem_path(target, max_len=96) if target else "Auto / simulator-selected")
+        self.diag_web.setText(f"{web_base}/ -> {self.info_cockpit_web.text()}")
+        self.diag_session.setText(f"{web_base}/desktop-status -> {self.info_session.text()}")
+        self.diag_metrics.setText(f"{web_base}/desktop-metrics -> {self.info_runtime_metrics.text()}")
+        self.diag_xplane.setText(f"{xp_base} -> {self.info_xplane.text()}")
+        self.diag_last_exit.setText(str(self._last_launcher_exit_code) if self._last_launcher_exit_code is not None else "—")
+        self.diag_runtime_rates.setText(
+            f"WS {self.metric_ws_rate.text()}/s | Dataref {self.metric_dataref_rate.text()}/s | Render {self.metric_dirty_rendered.text()}/s"
+        )
+        self.diag_runtime_batching.setText(
+            f"Queue {self.metric_queue_depth.text()} | Marks/flush {self.metric_marks_per_flush.text()} | Uptime {self.metric_uptime.text()}"
+        )
+
+        for lab in (
+            self.diag_launcher_path,
+            self.diag_launch_log_path,
+            self.diag_crash_log_path,
+            self.diag_target,
+            self.diag_web,
+            self.diag_session,
+            self.diag_xplane,
+            self.diag_metrics,
+            self.diag_last_exit,
+            self.diag_runtime_rates,
+            self.diag_runtime_batching,
+        ):
+            self._style_status_value(lab, lab.text())
+
+    def _build_diagnostics_bundle(self) -> dict:
+        settings = load_desktop_settings()
+        session = self._last_session_info or fetch_session_info(base_url=cockpit_web_base(settings))
+        metrics = self._last_metrics_obj
+        if metrics is None:
+            metrics, _ = cockpitdecks_metrics_json(base_url=cockpit_web_base(settings))
+        launch_target = self._selected_launch_target()
+        log_path = self._launch_log_path()
+        return {
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "desktop_app_version": self._desktop_app_version(),
+            "settings_path": str(settings_path()),
+            "settings": settings,
+            "launcher_binary": str(self._resolve_launcher_binary()),
+            "launch_target": str(launch_target) if launch_target is not None else "",
+            "launch_log_path": str(log_path) if log_path is not None else "",
+            "last_preflight_at": self.info_last_check.text(),
+            "diagnostics_summary": self.info_diag_warning.text(),
+            "session": {
+                "ok": session.ok,
+                "version": session.version,
+                "aircraft": session.aircraft,
+                "decks": session.decks,
+                "config_path": session.config_path,
+                "error": session.error,
+            },
+            "metrics": metrics,
+            "logs": self.log.toPlainText().splitlines()[-500:],
+        }
+
+    def export_diagnostics_bundle(self) -> None:
+        default_name = f"cockpitdecks-desktop-diagnostics-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export diagnostics bundle",
+            str(Path.home() / default_name),
+            "JSON files (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        out = Path(path).expanduser()
+        bundle = self._build_diagnostics_bundle()
+        out.write_text(json.dumps(bundle, indent=2, sort_keys=True), encoding="utf-8")
+        self._append(f"[ok] diagnostics exported to {out}")
+
     def _apply_metrics_visuals(self, metrics: dict | None) -> None:
         _bar_base = "QProgressBar {{ max-height: 8px; border-radius: 4px; background: #e5e7eb; border: none; }} QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}"
         if not isinstance(metrics, dict):
@@ -1027,11 +1745,18 @@ class MainWindow(QMainWindow):
             self.metric_dataref_rate.setText("—")
             self.metric_queue_depth.setText("—")
             self.metric_dirty_rendered.setText("—")
+            self.metric_ws_rate.setText("—")
+            self.metric_marks_per_flush.setText("—")
             self.metric_uptime.setText("—")
             self._prev_dataref_values_processed = None
             self._prev_dataref_poll_ts = None
             self._prev_dirty_rendered = None
             self._prev_dirty_poll_ts = None
+            self._prev_ws_messages_received = None
+            self._prev_dirty_marks = None
+            self._prev_dirty_flushes = None
+            self._prev_rate_poll_ts = None
+            self._update_diagnostics_warning(None)
             return
 
         p = metrics.get("process") if isinstance(metrics.get("process"), dict) else {}
@@ -1072,6 +1797,7 @@ class MainWindow(QMainWindow):
         traffic = metrics.get("dataref_traffic") if isinstance(metrics.get("dataref_traffic"), dict) else {}
         cur_vals = traffic.get("dataref_values_processed")
         now_ts = time.time()
+        rate_dt = now_ts - self._prev_rate_poll_ts if self._prev_rate_poll_ts is not None else None
         if isinstance(cur_vals, (int, float)) and self._prev_dataref_values_processed is not None and self._prev_dataref_poll_ts is not None:
             dt = now_ts - self._prev_dataref_poll_ts
             if dt > 0.5:
@@ -1100,6 +1826,38 @@ class MainWindow(QMainWindow):
             self._prev_dirty_rendered = int(cur_rendered)
             self._prev_dirty_poll_ts = now_ts
 
+        ws_messages = traffic.get("ws_messages_received")
+        if isinstance(ws_messages, (int, float)) and self._prev_ws_messages_received is not None and isinstance(rate_dt, (int, float)) and rate_dt > 0.5:
+            ws_rate = (ws_messages - self._prev_ws_messages_received) / rate_dt
+            self.metric_ws_rate.setText(f"{ws_rate:.1f}")
+        else:
+            self.metric_ws_rate.setText("—")
+        if isinstance(ws_messages, (int, float)):
+            self._prev_ws_messages_received = int(ws_messages)
+
+        dirty_marks = c.get("dirty_marks")
+        dirty_flushes = c.get("dirty_flushes")
+        if isinstance(dirty_marks, (int, float)) and isinstance(dirty_flushes, (int, float)):
+            if self._prev_dirty_marks is not None and self._prev_dirty_flushes is not None:
+                marks_delta = int(dirty_marks) - self._prev_dirty_marks
+                flush_delta = int(dirty_flushes) - self._prev_dirty_flushes
+                if flush_delta > 0:
+                    self.metric_marks_per_flush.setText(f"{marks_delta / flush_delta:.1f}")
+                elif marks_delta > 0:
+                    self.metric_marks_per_flush.setText("∞")
+                else:
+                    self.metric_marks_per_flush.setText("0")
+            else:
+                self.metric_marks_per_flush.setText("—")
+            self._prev_dirty_marks = int(dirty_marks)
+            self._prev_dirty_flushes = int(dirty_flushes)
+        else:
+            self.metric_marks_per_flush.setText("—")
+            self._prev_dirty_marks = None
+            self._prev_dirty_flushes = None
+
+        self._prev_rate_poll_ts = now_ts
+
         if isinstance(uptime_s, (int, float)):
             uptime_i = int(uptime_s)
             h, rem = divmod(uptime_i, 3600)
@@ -1107,6 +1865,7 @@ class MainWindow(QMainWindow):
             self.metric_uptime.setText(f"{h:d}:{m:02d}:{sec:02d}")
         else:
             self.metric_uptime.setText("—")
+        self._update_diagnostics_warning(metrics)
 
     def refresh_info_panel(self) -> None:
         ver = self._desktop_app_version()
@@ -1117,6 +1876,9 @@ class MainWindow(QMainWindow):
         wport = self._web_listen_port()
         tip_lines: list[str] = [f"Full path:\n{launcher}"]
         path_disp = _shorten_filesystem_path(launcher)
+        selected_target = self._selected_launch_target()
+        if selected_target is not None:
+            tip_lines.append(f"Launch target:\n{selected_target}")
         if launcher.exists():
             running = self._launcher_is_running()
             launcher_status = "Running" if running else "Ready"
@@ -1136,6 +1898,7 @@ class MainWindow(QMainWindow):
         self.info_launcher.setToolTip("\n\n".join(tip_lines))
 
         self._refresh_status_value_styles()
+        self._refresh_diagnostics_panel()
         self._refresh_start_stop_buttons()
         self._schedule_live_poll()
 
@@ -1169,6 +1932,8 @@ class MainWindow(QMainWindow):
         polled_at: str,
         metrics_obj: dict | None,
     ) -> None:
+        self._last_session_info = session_info
+        self._last_metrics_obj = metrics_obj
         self.info_xplane.setText(xplane_line)
         self.info_cockpit_web.setText(cockpit_web_line)
         self.info_session.setText(session_info.one_line())
@@ -1191,6 +1956,7 @@ class MainWindow(QMainWindow):
         self.info_live_poll_at.setText(polled_at)
         self._header_poll_time.setText(f"Last poll {polled_at}")
         self._refresh_status_value_styles()
+        self._refresh_diagnostics_panel()
 
         # Update connectivity dots
         xp_lower = xplane_line.lower()
@@ -1272,10 +2038,18 @@ class MainWindow(QMainWindow):
             self._append(f"[launch] already running (pid={self._launcher_process.pid})")
             self.refresh_info_panel()
             return
+        command = [str(launcher)]
+        target = self._selected_launch_target()
+        if target is not None:
+            if not target.exists():
+                self._append(f"[launch] selected target not found: {target}")
+                self.refresh_info_panel()
+                return
+            command.append(str(target))
         child_env = os.environ.copy()
         child_env.update(launch_env_overlay())
         self._launcher_process = subprocess.Popen(
-            [str(launcher)],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1283,6 +2057,11 @@ class MainWindow(QMainWindow):
             env=child_env,
         )
         self._append(f"[launch] started cockpitdecks (pid={self._launcher_process.pid})")
+        if target is not None:
+            self._append(f"[launch] target: {target}")
+        log_path = self._launch_log_path()
+        if log_path is not None:
+            self._append(f"[launch] appending launcher output to {log_path}")
         self._start_launcher_log_stream()
         self.refresh_info_panel()
 
@@ -1349,17 +2128,48 @@ class MainWindow(QMainWindow):
         proc = self._launcher_process
         if proc is None or proc.stdout is None:
             return
+        log_path = self._launch_log_path()
+        launcher = self._resolve_launcher_binary()
+        target = self._selected_launch_target()
 
         def _reader() -> None:
             assert proc.stdout is not None
-            for line in proc.stdout:
-                msg = line.rstrip("\n")
-                if msg:
+            fp = None
+            if log_path is not None:
+                try:
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    fp = log_path.open("a", encoding="utf-8", buffering=1)
+                    header = f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid={proc.pid} launcher={launcher}"
+                    if target is not None:
+                        header += f" target={target}"
+                    fp.write(header + " ===\n")
+                except OSError as exc:
+                    self.log_line.emit(f"[launch] could not open log file {log_path}: {exc}")
+                    fp = None
+            try:
+                for line in proc.stdout:
+                    msg = line.rstrip("\n")
+                    if not msg:
+                        continue
                     self.log_line.emit(msg)
-            rc = proc.poll()
-            if rc is not None:
-                self.log_line.emit(f"[launch] cockpitdecks exited (code={rc})")
-                self.log_line.emit("[launch] tip: open the Status tab and use Refresh status to update the panel")
+                    if fp is not None:
+                        try:
+                            fp.write(msg + "\n")
+                        except OSError as exc:
+                            self.log_line.emit(f"[launch] stopped writing log file {log_path}: {exc}")
+                            fp.close()
+                            fp = None
+                rc = proc.poll()
+                if rc is not None:
+                    self._last_launcher_exit_code = rc
+                    exit_msg = f"[launch] cockpitdecks exited (code={rc})"
+                    self.log_line.emit(exit_msg)
+                    if fp is not None:
+                        fp.write(exit_msg + "\n")
+                    self.log_line.emit("[launch] tip: open the Status tab and use Refresh status to update the panel")
+            finally:
+                if fp is not None:
+                    fp.close()
 
         self._launcher_log_thread = threading.Thread(target=_reader, name="LauncherLogStream", daemon=True)
         self._launcher_log_thread.start()
