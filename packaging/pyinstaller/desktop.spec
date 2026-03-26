@@ -49,8 +49,6 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
     name="cockpitdecks-desktop",
     debug=False,
@@ -61,9 +59,18 @@ exe = EXE(
     icon=str(ICON_PNG) if ICON_PNG.exists() else None,
 )
 
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    name="cockpitdecks-desktop",
+)
+
 if sys.platform == "darwin":
     app = BUNDLE(
-        exe,
+        coll,
         name="Cockpitdecks Desktop.app",
         icon=str(ICON_ICNS) if ICON_ICNS.exists() else None,
         bundle_identifier="com.cockpitdecks.desktop",
