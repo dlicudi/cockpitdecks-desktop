@@ -14,7 +14,7 @@ import threading
 import time
 import zipfile
 
-from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -24,8 +24,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -87,10 +85,18 @@ class LaunchTargetInfo:
     deck_names: list[str]
     config_ok: bool
     config_error: str = ""
+    # manifest.yaml fields
+    has_manifest: bool = False
+    config_name: str = ""        # manifest `name` (short label, e.g. "Cirrus SR22")
     version: str = ""
-    docs_title: str = ""
-    docs_summary: str = ""
-    docs_path: str = ""
+    icao: str = ""
+    manifest_status: str = ""
+    description: str = ""
+    layout_infos: list[tuple[str, str]] = None  # (layout_id, status) from manifest layouts[]
+
+    def __post_init__(self) -> None:
+        if self.layout_infos is None:
+            self.layout_infos = []
 
 
 def _shorten_filesystem_path(path: Path | str, *, max_len: int = 72) -> str:
@@ -195,8 +201,8 @@ class MainWindow(QMainWindow):
         def _section_heading(text: str) -> QLabel:
             h = QLabel(text)
             h.setStyleSheet(
-                "font-size: 11px; font-weight: 700; color: #6b7280; letter-spacing: 0.05em; "
-                "text-transform: uppercase; border: none; padding: 0; margin: 0;"
+                "font-size: 11px; font-weight: 700; color: #6b7280; "
+                "border: none; padding: 0; margin: 0;"
             )
             return h
 
@@ -558,15 +564,23 @@ class MainWindow(QMainWindow):
         decks_toolbar.addStretch(1)
         tab_decks_layout.addLayout(decks_toolbar)
 
-        self.decks_list = QListWidget()
-        self.decks_list.setAlternatingRowColors(True)
-        self.decks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.decks_list.setStyleSheet(
-            "QListWidget { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; }"
-            "QListWidget::item { padding: 6px 0; border: none; background: transparent; }"
-            "QListWidget::item:selected { background: transparent; border: none; }"
+        self._selected_deck_path: str = ""
+        self._deck_grid_container = QWidget()
+        self._deck_grid_container.setStyleSheet("background: transparent;")
+        self._deck_grid_layout = QGridLayout(self._deck_grid_container)
+        self._deck_grid_layout.setContentsMargins(4, 4, 4, 4)
+        self._deck_grid_layout.setSpacing(10)
+        for _c in range(4):
+            self._deck_grid_layout.setColumnStretch(_c, 1)
+        self._deck_grid_area = QScrollArea()
+        self._deck_grid_area.setWidgetResizable(True)
+        self._deck_grid_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._deck_grid_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._deck_grid_area.setStyleSheet(
+            "QScrollArea { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }"
         )
-        tab_decks_layout.addWidget(self.decks_list, 1)
+        self._deck_grid_area.setWidget(self._deck_grid_container)
+        tab_decks_layout.addWidget(self._deck_grid_area, 1)
 
         self.decks_summary = QLabel("No targets discovered yet.")
         self.decks_summary.setStyleSheet("font-size: 12px; color: #64748b; border: none;")
@@ -680,9 +694,6 @@ class MainWindow(QMainWindow):
         self.btn_refresh.clicked.connect(self.refresh_info_panel)
         self.btn_check.clicked.connect(self.run_preflight)
         self.btn_export_diag.clicked.connect(self.export_diagnostics_bundle)
-        self.diag_tab.refresh_clicked.connect(self.refresh_info_panel)
-        self.diag_tab.check_clicked.connect(self.run_preflight)
-        self.diag_tab.export_clicked.connect(self.export_diagnostics_bundle)
         self.btn_update.clicked.connect(self.check_updates)
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
@@ -696,8 +707,6 @@ class MainWindow(QMainWindow):
         self.log_line.connect(self._append)
         self.live_poll_done.connect(self._apply_live_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
-        self.decks_list.itemSelectionChanged.connect(self._update_decks_actions)
-        self.decks_list.itemDoubleClicked.connect(lambda _item: self._use_selected_decks_target())
 
         self.setStyleSheet(MAIN_WINDOW_QSS)
         self.btn_clear_logs.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -804,7 +813,15 @@ class MainWindow(QMainWindow):
             if color is None:
                 color = "#d4d4d4"
 
-        self.log.appendPlainText(safe_text)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        cursor = self.log.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self.log.document().isEmpty():
+            cursor.insertBlock()
+        cursor.insertText(safe_text, fmt)
+        self.log.setTextCursor(cursor)
+        self.log.ensureCursorVisible()
         self._set_status_feedback(safe_text)
 
     def _copy_log_selection(self) -> None:
@@ -1133,16 +1150,14 @@ class MainWindow(QMainWindow):
         config_path = aircraft_dir / "deckconfig" / "config.yaml"
         aircraft_name = aircraft_dir.name
         deck_names: list[str] = []
-        deck_layouts: list[tuple[str, str]] = []
         config_ok = True
         config_error = ""
         version = ""
-        docs_title = ""
-        docs_summary = ""
-        docs_path = ""
+        icao = ""
+        manifest_status = ""
+        description = ""
         inside_decks = False
         decks_indent = 0
-        current_deck_name = ""
 
         try:
             lines = config_path.read_text(encoding="utf-8").splitlines()
@@ -1176,45 +1191,29 @@ class MainWindow(QMainWindow):
             if inside_decks and stripped.startswith("- name:"):
                 value = stripped.split(":", 1)[1].strip()
                 if value:
-                    current_deck_name = value.strip("'\"")
-                    deck_names.append(current_deck_name)
-                continue
-            if inside_decks and stripped.startswith("layout:"):
-                value = stripped.split(":", 1)[1].strip()
-                if value and current_deck_name:
-                    deck_layouts.append((current_deck_name, value.strip("'\"")))
+                    deck_names.append(value.strip("'\""))
 
         if not deck_names:
             config_ok = False
             config_error = "no deck entries found"
 
+        has_manifest = False
+        config_name = ""
+        layout_infos: list[tuple[str, str]] = []
+
         manifest_path = aircraft_dir / "manifest.yaml"
         if manifest_path.is_file():
+            has_manifest = True
             meta = self._parse_simple_yaml_meta(manifest_path)
             version = (meta.get("version") or "").strip()
-
-        docs_snippets: list[str] = []
-        docs_notes: list[str] = []
-        for deck_name, layout_name in deck_layouts:
-            docs_file = aircraft_dir / "deckconfig" / layout_name / "_docs.yaml"
-            if not docs_file.is_file():
-                continue
-            meta = self._parse_simple_yaml_meta(docs_file)
-            status = (meta.get("status") or "").strip()
-            notes = (meta.get("notes") or "").strip()
-            if status:
-                docs_snippets.append(f"{deck_name}: {status}")
-            if notes:
-                docs_notes.append(notes)
-            if not docs_path:
-                docs_path = str(docs_file)
-        if docs_snippets:
-            docs_title = "Deck Docs"
-            docs_summary = " | ".join(docs_snippets[:3])
-            if len(docs_snippets) > 3:
-                docs_summary += " | …"
-            if docs_notes:
-                docs_summary += f" | {docs_notes[0]}"
+            icao = (meta.get("icao") or "").strip()
+            manifest_status = (meta.get("status") or "").strip()
+            description = (meta.get("description") or "").strip()
+            config_name = (meta.get("name") or "").strip()
+            manifest_aircraft = (meta.get("aircraft") or config_name or "").strip()
+            if manifest_aircraft:
+                aircraft_name = manifest_aircraft
+            layout_infos = self._parse_manifest_layouts(manifest_path)
 
         return LaunchTargetInfo(
             aircraft_name=aircraft_name,
@@ -1224,11 +1223,56 @@ class MainWindow(QMainWindow):
             deck_names=deck_names,
             config_ok=config_ok,
             config_error=config_error,
+            has_manifest=has_manifest,
+            config_name=config_name,
             version=version,
-            docs_title=docs_title,
-            docs_summary=docs_summary,
-            docs_path=docs_path,
+            icao=icao,
+            manifest_status=manifest_status,
+            description=description,
+            layout_infos=layout_infos,
         )
+
+    def _parse_manifest_layouts(self, manifest_path: Path) -> list[tuple[str, str]]:
+        """Return (layout_id, status) pairs from the layouts: list in manifest.yaml."""
+        results: list[tuple[str, str]] = []
+        in_layouts = False
+        current_id = ""
+        current_status = ""
+
+        try:
+            lines = manifest_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return results
+
+        for raw in lines:
+            if not raw.strip() or raw.lstrip().startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            stripped = raw.strip()
+
+            if stripped == "layouts:":
+                in_layouts = True
+                continue
+
+            if in_layouts:
+                if indent == 0:
+                    if current_id:
+                        results.append((current_id, current_status))
+                        current_id = ""
+                        current_status = ""
+                    in_layouts = False
+                elif stripped.startswith("- id:"):
+                    if current_id:
+                        results.append((current_id, current_status))
+                    current_id = stripped.split(":", 1)[1].strip().strip("'\"")
+                    current_status = ""
+                elif current_id and stripped.startswith("status:"):
+                    current_status = stripped.split(":", 1)[1].strip().strip("'\"")
+
+        if current_id:
+            results.append((current_id, current_status))
+
+        return results
 
     def _launch_target_label(self, info: LaunchTargetInfo) -> str:
         root = Path(info.root)
@@ -1274,202 +1318,161 @@ class MainWindow(QMainWindow):
     def _matching_launch_targets(self) -> list[LaunchTargetInfo]:
         return list(self._launch_targets)
 
-    def _render_target_item_text(self, info: LaunchTargetInfo) -> str:
-        deck_desc = ", ".join(info.deck_names[:4]) if info.deck_names else "No deck names parsed"
-        if len(info.deck_names) > 4:
-            deck_desc += "…"
-        status = "Ready" if info.config_ok else f"Needs review ({info.config_error})"
-        source = self._source_label(info)
-        text = (
-            f"{info.aircraft_name}\n"
-            f"{info.deck_count} deck(s)  |  {source}\n"
-            f"{deck_desc}\n"
-            f"{_shorten_filesystem_path(info.path, max_len=100)}\n"
-            f"{status}"
-        )
-        if info.docs_summary:
-            text += f"\nDocs: {info.docs_summary}"
-        return text
-
     def _build_deck_item_widget(self, info: LaunchTargetInfo, *, is_active: bool = False, is_selected: bool = False) -> QWidget:
-        source = self._source_label(info)
-        deck_desc = ", ".join(info.deck_names[:4]) if info.deck_names else "No deck names parsed"
-        if len(info.deck_names) > 4:
-            deck_desc += "…"
-        status_text = "Ready" if info.config_ok else f"Needs review: {info.config_error}"
         managed = self._is_managed_target(info.path)
 
+        # Background = active, border = selected, chips = source
+        bg = "#f0fdf4" if is_active else "#f8fafc"
+        border = "#3b82f6" if is_selected else "#e2e8f0"
+
         card = QFrame()
-        border = "#2563eb" if is_selected else "#dbe3ee"
-        bg = "#f8fbff" if is_selected else "#ffffff"
+        card.setObjectName("deckcard")
         card.setStyleSheet(
-            f"QFrame {{ background: {bg}; border: 1px solid {border}; border-radius: 14px; }}"
+            f"QFrame#deckcard {{ background: {bg};"
+            f" border: 2px solid {border}; border-radius: 8px; }}"
         )
-        root = QVBoxLayout(card)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(10)
+        card.setFixedHeight(130)
 
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(8)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setSpacing(3)
 
-        title = QLabel(info.aircraft_name)
-        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #0f172a; border: none;")
-        top.addWidget(title, 1)
+        # ── Row 1: aircraft name ──────────────────────────────────
+        name_lbl = QLabel(info.aircraft_name)
+        name_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #1e293b;")
+        name_lbl.setWordWrap(True)
+        cl.addWidget(name_lbl)
 
-        count_badge = QLabel(f"{info.deck_count} layout" + ("" if info.deck_count == 1 else "s"))
-        count_badge.setStyleSheet(
-            "font-size: 11px; font-weight: 700; color: #475569; "
-            "background: #f1f5f9; border-radius: 999px; padding: 3px 8px; border: none;"
-        )
-        top.addWidget(count_badge, 0)
-
-        if is_active:
-            active_badge = QLabel("Active")
-            active_badge.setStyleSheet(
-                "font-size: 11px; font-weight: 700; color: #166534; "
-                "background: #dcfce7; border-radius: 999px; padding: 3px 8px; border: none;"
-            )
-            top.addWidget(active_badge, 0)
-
-        source_badge = QLabel("Imported" if managed else "Local")
-        source_bg = "#dbeafe" if managed else "#fef3c7"
-        source_fg = "#1d4ed8" if managed else "#92400e"
-        source_badge.setStyleSheet(
-            f"font-size: 11px; font-weight: 700; color: {source_fg}; "
-            f"background: {source_bg}; border-radius: 999px; padding: 3px 8px; border: none;"
-        )
-        top.addWidget(source_badge, 0)
-
+        # ── Row 2: meta line — version · status · ICAO ───────────
+        meta_parts: list[str] = []
         version = str(info.version or "").strip()
         if version:
-            version_badge = QLabel(version if version.startswith("v") else f"v{version}")
-            version_badge.setStyleSheet(
-                "font-size: 11px; font-weight: 700; color: #5b21b6; "
-                "background: #ede9fe; border-radius: 999px; padding: 3px 8px; border: none;"
-            )
-            top.addWidget(version_badge, 0)
-        root.addLayout(top)
+            meta_parts.append(version if version.startswith("v") else f"v{version}")
+        if info.manifest_status:
+            meta_parts.append(info.manifest_status)
+        if info.icao:
+            meta_parts.append(info.icao)
+        if meta_parts:
+            meta_lbl = QLabel(" · ".join(meta_parts))
+            meta_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
+            cl.addWidget(meta_lbl)
 
-        meta = QLabel(source)
-        meta.setStyleSheet("font-size: 12px; color: #475569; border: none;")
-        names = QLabel(deck_desc)
-        names.setStyleSheet("font-size: 12px; color: #334155; border: none;")
+        # ── Row 3: chips — source + state ─────────────────────────
+        chips = QHBoxLayout()
+        chips.setContentsMargins(0, 2, 0, 0)
+        chips.setSpacing(4)
 
-        path_label = QLabel(_shorten_filesystem_path(info.path, max_len=96))
-        path_label.setStyleSheet("font-size: 12px; color: #64748b; border: none;")
-
-        middle = QHBoxLayout()
-        middle.setContentsMargins(0, 0, 0, 0)
-        middle.setSpacing(16)
-
-        left_col = QVBoxLayout()
-        left_col.setContentsMargins(0, 0, 0, 0)
-        left_col.setSpacing(8)
-        left_col.addWidget(meta)
-        left_col.addWidget(names)
-        left_col.addWidget(path_label)
-        middle.addLayout(left_col, 3)
-
-        root.addLayout(middle)
-
-        bottom = QHBoxLayout()
-        bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.setSpacing(8)
-
-        status = QLabel(status_text)
-        status_fg = "#166534" if info.config_ok else "#991b1b"
-        status_bg = "#f0fdf4" if info.config_ok else "#fef2f2"
-        status.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        status.setStyleSheet(
-            f"font-size: 11px; font-weight: 600; color: {status_fg}; "
-            f"background: {status_bg}; border-radius: 8px; padding: 4px 10px 5px 10px; border: none;"
+        src_text = "Imported" if managed else "Local"
+        src_bg = "#dbeafe" if managed else "#fef3c7"
+        src_fg = "#1d4ed8" if managed else "#92400e"
+        src_chip = QLabel(src_text)
+        src_chip.setStyleSheet(
+            f"font-size: 9px; font-weight: 600; color: {src_fg};"
+            f" background: {src_bg}; border-radius: 4px; padding: 1px 5px;"
         )
-        bottom.addWidget(status, 0)
-        bottom.addStretch(1)
+        chips.addWidget(src_chip)
 
-        root.addLayout(bottom)
+        if is_active:
+            act_chip = QLabel("Active")
+            act_chip.setStyleSheet(
+                "font-size: 9px; font-weight: 600; color: #15803d;"
+                " background: #dcfce7; border-radius: 4px; padding: 1px 5px;"
+            )
+            chips.addWidget(act_chip)
+        elif not info.config_ok:
+            err_chip = QLabel("Needs review")
+            err_chip.setStyleSheet(
+                "font-size: 9px; font-weight: 600; color: #991b1b;"
+                " background: #fee2e2; border-radius: 4px; padding: 1px 5px;"
+            )
+            chips.addWidget(err_chip)
+        elif not info.has_manifest:
+            nm_chip = QLabel("No manifest")
+            nm_chip.setStyleSheet(
+                "font-size: 9px; color: #94a3b8;"
+                " background: #f1f5f9; border-radius: 4px; padding: 1px 5px;"
+            )
+            chips.addWidget(nm_chip)
+
+        chips.addStretch(1)
+        cl.addLayout(chips)
+
+        cl.addStretch(1)
+
+        # ── Bottom: layout names ──────────────────────────────────
+        if info.layout_infos:
+            names = ", ".join(lid for lid, _ in info.layout_infos[:4])
+            if len(info.layout_infos) > 4:
+                names += "…"
+        elif info.deck_names:
+            names = ", ".join(info.deck_names[:4])
+            if len(info.deck_names) > 4:
+                names += "…"
+        else:
+            names = ""
+        if names:
+            ll = QLabel(names)
+            ll.setStyleSheet("font-size: 9px; color: #94a3b8;")
+            cl.addWidget(ll)
+
         return card
 
-    def _refresh_deck_item_widgets(self) -> None:
-        if not hasattr(self, "decks_list"):
+    def _populate_decks_list(self) -> None:
+        if not hasattr(self, "_deck_grid_layout"):
             return
+        # Clear existing grid widgets
+        while self._deck_grid_layout.count():
+            child = self._deck_grid_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
         active_path = self._configured_launch_target()
-        selected_path = self._selected_decks_target_path()
-        for idx in range(self.decks_list.count()):
-            item = self.decks_list.item(idx)
-            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
-            info = next((t for t in self._launch_targets if t.path == path), None)
-            if info is None:
-                continue
+        if not self._selected_deck_path:
+            self._selected_deck_path = active_path
+
+        matching = self._matching_launch_targets()
+
+        grid_row = 0
+        for col_idx, info in enumerate(matching):
+            col = col_idx % 4
+            if col == 0 and col_idx > 0:
+                grid_row += 1
             widget = self._build_deck_item_widget(
                 info,
-                is_active=(path == active_path),
-                is_selected=(path == selected_path),
+                is_active=(info.path == active_path),
+                is_selected=(info.path == self._selected_deck_path),
             )
-            widget.adjustSize()
-            item.setSizeHint(widget.sizeHint() + QSize(0, 10))
-            self.decks_list.setItemWidget(item, widget)
+            widget.setCursor(Qt.CursorShape.PointingHandCursor)
+            path = info.path
+            widget.mousePressEvent = lambda _ev, p=path: self._on_deck_card_clicked(p)
+            self._deck_grid_layout.addWidget(widget, grid_row, col)
+        grid_row += 1
 
-    def _populate_decks_list(self) -> None:
-        if not hasattr(self, "decks_list"):
-            return
-        selected = self._selected_launch_target()
-        selected_path = str(selected) if selected is not None else ""
-        self.decks_list.clear()
-        matching = self._matching_launch_targets()
-        for info in matching:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, info.path)
-            item.setToolTip(
-                f"Aircraft: {info.aircraft_name}\n"
-                f"Source: {self._source_label(info)}\n"
-                f"Decks: {', '.join(info.deck_names) if info.deck_names else '—'}\n"
-                f"Path: {info.path}"
-                + (f"\nDocs: {info.docs_summary}" if info.docs_summary else "")
-                + (f"\nDocs file: {info.docs_path}" if info.docs_path else "")
-            )
-            self.decks_list.addItem(item)
-            widget = self._build_deck_item_widget(info, is_active=(info.path == selected_path))
-            widget.adjustSize()
-            item.setSizeHint(widget.sizeHint() + QSize(0, 10))
-            self.decks_list.setItemWidget(item, widget)
-        self._select_decks_item_by_path(selected_path)
+        # Pushes cards to top when there are few entries
+        self._deck_grid_layout.setRowStretch(grid_row, 1)
+
         total = len(self._launch_targets)
         shown = len(matching)
         self.decks_summary.setText(f"{shown} shown / {total} discovered")
         self._update_decks_actions()
 
+    def _on_deck_card_clicked(self, path: str) -> None:
+        self._selected_deck_path = path
+        self._populate_decks_list()
+
     def _select_decks_item_by_path(self, path: str) -> None:
-        if not hasattr(self, "decks_list"):
-            return
-        self.decks_list.blockSignals(True)
-        self.decks_list.clearSelection()
-        if path:
-            for idx in range(self.decks_list.count()):
-                item = self.decks_list.item(idx)
-                if item.data(Qt.ItemDataRole.UserRole) == path:
-                    item.setSelected(True)
-                    self.decks_list.setCurrentItem(item)
-                    break
-        self.decks_list.blockSignals(False)
-        self._refresh_deck_item_widgets()
-        self._update_decks_actions()
+        self._selected_deck_path = path
+        self._populate_decks_list()
 
     def _selected_decks_target_path(self) -> str:
-        item = self.decks_list.currentItem() if hasattr(self, "decks_list") else None
-        if item is None:
-            return ""
-        return str(item.data(Qt.ItemDataRole.UserRole) or "")
+        return self._selected_deck_path
 
     def _update_decks_actions(self) -> None:
         if not hasattr(self, "btn_decks_select"):
             return
-        selected = self._selected_decks_target_path()
-        has_selected = bool(selected)
+        has_selected = bool(self._selected_deck_path)
         self.btn_decks_select.setEnabled(has_selected)
         self.btn_decks_reveal.setEnabled(has_selected)
-        self._refresh_deck_item_widgets()
 
     def _select_launch_target(self, path: str) -> None:
         save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=path))
@@ -1636,10 +1639,9 @@ class MainWindow(QMainWindow):
         self.refresh_info_panel()
 
     def _desktop_app_version(self) -> str:
-        try:
-            return importlib.metadata.version("cockpitdecks-desktop")
-        except importlib.metadata.PackageNotFoundError:
-            return "unknown"
+        from cockpitdecks_desktop import __version__
+
+        return __version__
 
     @staticmethod
     def _style_status_value(label: QLabel, text: str) -> None:
@@ -1760,15 +1762,21 @@ class MainWindow(QMainWindow):
                 return True
             return None
 
-        web_text = f"{web_base}/ -> {self.info_cockpit_web.text()}"
-        status_text = f"{web_base}/desktop-status -> {self.info_session.text()}"
-        metrics_text = f"{web_base}/desktop-metrics -> {self.info_runtime_metrics.text()}"
+        ckpt_text = f"{web_base} -> {self.info_cockpit_web.text()}"
         xplane_text = f"{xp_base} -> {self.info_xplane.text()}"
+
+        hw_text = "\u2014"
+        hw_ok: bool | None = None
+        if self._last_session_info is not None and self._last_session_info.ok:
+            hw_text = self._last_session_info.decks
+            hw_ok = "no decks" not in hw_text.lower()
+        elif self._last_session_info is not None:
+            hw_text = "unknown (no session)"
+
         self.diag_tab.update_checks(
-            web_text, _check_ok(self.info_cockpit_web.text()),
-            status_text, _check_ok(self.info_session.text()),
-            metrics_text, _check_ok(self.info_runtime_metrics.text()),
+            ckpt_text, _check_ok(self.info_cockpit_web.text()),
             xplane_text, _check_ok(self.info_xplane.text()),
+            hw_text, hw_ok,
         )
 
         # ── Runtime pressure ──
