@@ -4,13 +4,17 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
-
-hiddenimports = collect_submodules("PySide6")
+hiddenimports = [
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+]
 
 if sys.platform == "darwin":
-    hiddenimports += collect_submodules("AppKit")
-    hiddenimports += collect_submodules("objc")
+    hiddenimports += [
+        "AppKit",
+        "objc",
+    ]
 
 block_cipher = None
 
