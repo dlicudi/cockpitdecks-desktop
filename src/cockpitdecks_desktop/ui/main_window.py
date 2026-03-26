@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-import html as html_mod
 import importlib.metadata
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import zipfile
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -26,13 +27,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QStatusBar,
     QTabWidget,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -42,6 +44,7 @@ from cockpitdecks_desktop.services.desktop_settings import (
     launcher_binary_path,
     load as load_desktop_settings,
     launch_env_overlay,
+    managed_decks_dir,
     save as save_desktop_settings,
     settings_path,
     xplane_rest_base,
@@ -61,6 +64,13 @@ from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 
 
+def _path_key(p: str) -> str:
+    try:
+        return str(Path(p).expanduser().resolve())
+    except OSError:
+        return str(Path(p).expanduser())
+
+
 @dataclass
 class CommandStep:
     title: str
@@ -77,6 +87,7 @@ class LaunchTargetInfo:
     deck_names: list[str]
     config_ok: bool
     config_error: str = ""
+    version: str = ""
     docs_title: str = ""
     docs_summary: str = ""
     docs_path: str = ""
@@ -524,8 +535,7 @@ class MainWindow(QMainWindow):
         tab_decks_layout.setSpacing(10)
 
         decks_intro = QLabel(
-            "Available aircraft targets discovered from <code>COCKPITDECKS_PATH</code>. "
-            "Select one to make it the default launch target, or launch directly from here."
+            "Import a deck zip or pick a local deck target to make it the default launch target."
         )
         decks_intro.setWordWrap(True)
         decks_intro.setStyleSheet("font-size: 13px; color: #475569; border: none;")
@@ -533,35 +543,28 @@ class MainWindow(QMainWindow):
 
         decks_toolbar = QHBoxLayout()
         decks_toolbar.setSpacing(8)
-        self.ed_decks_filter = QLineEdit()
-        self.ed_decks_filter.setPlaceholderText("Filter by aircraft, deck name, or path…")
-        self.launch_target_combo = QComboBox()
-        self.launch_target_combo.setMinimumWidth(220)
-        self.launch_target_combo.setToolTip("Optional aircraft/deckconfig target discovered from COCKPITDECKS_PATH.")
-        self.btn_decks_refresh = QPushButton("Refresh List")
-        self.btn_decks_use_auto = QPushButton("Use Auto")
+        self.btn_decks_import = QPushButton("Import Deck…")
         self.btn_decks_select = QPushButton("Use Selected")
-        self.btn_decks_launch = QPushButton("Launch Selected")
         self.btn_decks_reveal = QPushButton("Reveal Folder")
-        for b in (self.btn_decks_refresh, self.btn_decks_use_auto, self.btn_decks_select, self.btn_decks_launch, self.btn_decks_reveal):
+        for b in (
+            self.btn_decks_import,
+            self.btn_decks_select,
+            self.btn_decks_reveal,
+        ):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-        decks_toolbar.addWidget(self.ed_decks_filter, 1)
-        decks_toolbar.addWidget(QLabel("Target"))
-        decks_toolbar.addWidget(self.launch_target_combo)
-        decks_toolbar.addWidget(self.btn_decks_refresh)
-        decks_toolbar.addWidget(self.btn_decks_use_auto)
+        decks_toolbar.addWidget(self.btn_decks_import)
         decks_toolbar.addWidget(self.btn_decks_select)
-        decks_toolbar.addWidget(self.btn_decks_launch)
         decks_toolbar.addWidget(self.btn_decks_reveal)
+        decks_toolbar.addStretch(1)
         tab_decks_layout.addLayout(decks_toolbar)
 
         self.decks_list = QListWidget()
         self.decks_list.setAlternatingRowColors(True)
         self.decks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.decks_list.setStyleSheet(
-            "QListWidget { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 4px; }"
-            "QListWidget::item { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; }"
-            "QListWidget::item:selected { background: #eff6ff; color: #0f172a; border: 1px solid #bfdbfe; }"
+            "QListWidget { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px; }"
+            "QListWidget::item { padding: 6px 0; border: none; background: transparent; }"
+            "QListWidget::item:selected { background: transparent; border: none; }"
         )
         tab_decks_layout.addWidget(self.decks_list, 1)
 
@@ -572,13 +575,13 @@ class MainWindow(QMainWindow):
         # ════════════════════════════════════════
         #  LOGS TAB
         # ════════════════════════════════════════
-        self.log = QTextEdit()
+        self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setPlaceholderText("Preflight, launch, and Cockpitdecks output will appear here…")
+        self.log.setPlaceholderText("Preflight, launch, and Cockpitdecks output will appear here...")
         self.log.setStyleSheet(
-            "QTextEdit { font-family: Menlo, Monaco, monospace; font-size: 12px;"
+            "QPlainTextEdit { font-family: Menlo, Monaco, monospace; font-size: 12px;"
             " background-color: #1e1e1e; color: #d4d4d4; border: 1px solid #333; border-radius: 4px; padding: 4px; }"
-            " QTextEdit::selection { background-color: #264f78; color: #ffffff; }"
+            " QPlainTextEdit::selection { background-color: #264f78; color: #ffffff; }"
         )
 
         tab_logs = QWidget()
@@ -611,7 +614,7 @@ class MainWindow(QMainWindow):
         search_layout.setContentsMargins(8, 4, 8, 4)
         search_layout.setSpacing(6)
         self._log_search_input = QLineEdit()
-        self._log_search_input.setPlaceholderText("Search logs…")
+        self._log_search_input.setPlaceholderText("Search logs...")
         self._log_search_input.setStyleSheet(
             "QLineEdit { background: #1e1e1e; color: #d4d4d4; border: 1px solid #555;"
             " border-radius: 3px; padding: 3px 6px; font-family: Menlo, Monaco, monospace; font-size: 12px; }"
@@ -685,22 +688,17 @@ class MainWindow(QMainWindow):
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
         self.btn_stop.clicked.connect(self.stop_cockpitdecks)
         self.btn_reload.clicked.connect(self.reload_decks)
-        self.btn_decks_refresh.clicked.connect(self._refresh_launch_targets)
-        self.btn_decks_use_auto.clicked.connect(self._use_auto_launch_target)
+        self.btn_decks_import.clicked.connect(self._import_deck_zip)
         self.btn_decks_select.clicked.connect(self._use_selected_decks_target)
-        self.btn_decks_launch.clicked.connect(self._launch_selected_decks_target)
         self.btn_decks_reveal.clicked.connect(self._reveal_selected_decks_target)
         self.btn_clear_logs.clicked.connect(self.log.clear)
         self.btn_copy_logs.clicked.connect(self._copy_log_selection)
         self.log_line.connect(self._append)
         self.live_poll_done.connect(self._apply_live_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
-        self.launch_target_combo.currentIndexChanged.connect(self._on_launch_target_changed)
-        self.ed_decks_filter.textChanged.connect(self._populate_decks_list)
         self.decks_list.itemSelectionChanged.connect(self._update_decks_actions)
-        self.decks_list.itemDoubleClicked.connect(lambda _item: self._launch_selected_decks_target())
+        self.decks_list.itemDoubleClicked.connect(lambda _item: self._use_selected_decks_target())
 
-        self.log.setAlignment(Qt.AlignTop)
         self.setStyleSheet(MAIN_WINDOW_QSS)
         self.btn_clear_logs.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_copy_logs.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -755,6 +753,14 @@ class MainWindow(QMainWindow):
         "CRITICAL": 50,
     }
 
+    _SAFE_TEXT_TRANSLATION = str.maketrans({
+        "\u2014": "-",
+        "\u2026": "...",
+        "\u00b7": "|",
+        "\u221e": "inf",
+        "\u00a9": "(c)",
+    })
+
     def _append(self, text: str) -> None:
         if not text:
             return
@@ -778,7 +784,7 @@ class MainWindow(QMainWindow):
                     if line_pri < min_pri:
                         return
 
-        escaped = html_mod.escape(text)
+        safe_text = text.translate(self._SAFE_TEXT_TRANSLATION)
         low = text.lower()
 
         # Priority 1: error keywords anywhere
@@ -798,14 +804,14 @@ class MainWindow(QMainWindow):
             if color is None:
                 color = "#d4d4d4"
 
-        self.log.append(f'<span style="color:{color}">{escaped}</span>')
-        self._set_status_feedback(text)
+        self.log.appendPlainText(safe_text)
+        self._set_status_feedback(safe_text)
 
     def _copy_log_selection(self) -> None:
         cursor = self.log.textCursor()
         text = cursor.selectedText() if cursor.hasSelection() else self.log.toPlainText()
         if text:
-            # QTextEdit uses U+2029 (paragraph separator) instead of \n in selections
+            # QPlainTextEdit selections may use U+2029 instead of \n
             text = text.replace("\u2029", "\n")
             from PySide6.QtWidgets import QApplication
             clipboard = QApplication.clipboard()
@@ -867,7 +873,7 @@ class MainWindow(QMainWindow):
             cursor = doc.find(query, cursor)
             if cursor.isNull():
                 break
-            sel = QTextEdit.ExtraSelection()
+            sel = QPlainTextEdit.ExtraSelection()
             sel.cursor = QTextCursor(cursor)
             sel.format = fmt
             selections.append(sel)
@@ -961,6 +967,110 @@ class MainWindow(QMainWindow):
         settings.update({k: v for k, v in updates.items()})
         return settings
 
+    def _managed_decks_dir(self) -> Path:
+        return managed_decks_dir()
+
+    def _normalize_cd_path_entries(self, raw: str) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for chunk in raw.replace(";", ":").split(":"):
+            s = chunk.strip()
+            if not s:
+                continue
+            key = _path_key(s)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s)
+        return out
+
+    def _ensure_search_root(self, root: Path) -> None:
+        settings = load_desktop_settings()
+        paths = self._normalize_cd_path_entries(settings.get("COCKPITDECKS_PATH", ""))
+        key = _path_key(str(root))
+        if key not in {_path_key(p) for p in paths}:
+            paths.append(str(root))
+            save_desktop_settings(self._settings_with_updates(COCKPITDECKS_PATH=":".join(paths)))
+            self.settings_form.reload_from_disk()
+
+    def _extract_manifest_id(self, manifest_path: Path) -> str:
+        try:
+            import yaml
+
+            with manifest_path.open("r", encoding="utf-8") as fp:
+                loaded = yaml.safe_load(fp) or {}
+            data = loaded if isinstance(loaded, dict) else {}
+        except Exception as exc:
+            raise ValueError(f"could not read manifest.yaml: {exc}") from exc
+        deck_id = str(data.get("id") or "").strip()
+        if not deck_id:
+            raise ValueError("manifest.yaml is missing required 'id'")
+        return deck_id
+
+    def _import_deck_zip(self) -> None:
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Deck Zip",
+            str(Path.home()),
+            "Deck zip (*.zip);;All files (*)",
+        )
+        if not zip_path:
+            return
+        try:
+            imported = self._install_deck_zip(Path(zip_path))
+        except Exception as exc:
+            self._append(f"[error] deck import failed: {exc}")
+            QMessageBox.critical(self, "Import Deck", str(exc))
+            return
+        self._append(f"[ok] imported deck: {imported}")
+        self._refresh_launch_targets()
+        selected = imported / "deckconfig"
+        if selected.exists():
+            self._select_launch_target(str(imported))
+        self.refresh_info_panel()
+
+    def _install_deck_zip(self, zip_path: Path) -> Path:
+        library = self._managed_decks_dir()
+        library.mkdir(parents=True, exist_ok=True)
+        temp_dir = library / ".import-tmp"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(temp_dir)
+            manifest_candidates = sorted(temp_dir.rglob("manifest.yaml"))
+            if not manifest_candidates:
+                raise ValueError("zip does not contain manifest.yaml")
+            manifest_path = manifest_candidates[0]
+            deck_root = manifest_path.parent
+            if not (deck_root / "deckconfig").is_dir():
+                raise ValueError("zip does not contain deckconfig/ next to manifest.yaml")
+            deck_id = self._extract_manifest_id(manifest_path)
+            target_dir = library / deck_id
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            shutil.move(str(deck_root), str(target_dir))
+            self._ensure_search_root(library)
+            return target_dir
+        finally:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _is_managed_target(self, target: Path | str) -> bool:
+        try:
+            target_path = Path(target).expanduser().resolve()
+            managed_root = self._managed_decks_dir().resolve()
+            target_path.relative_to(managed_root)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _source_label(self, info: LaunchTargetInfo) -> str:
+        if self._is_managed_target(info.path):
+            return "Managed Library"
+        return _shorten_filesystem_path(info.root, max_len=40)
+
     def _configured_launch_target(self) -> str:
         return (load_desktop_settings().get("COCKPITDECKS_TARGET") or "").strip()
 
@@ -1026,6 +1136,7 @@ class MainWindow(QMainWindow):
         deck_layouts: list[tuple[str, str]] = []
         config_ok = True
         config_error = ""
+        version = ""
         docs_title = ""
         docs_summary = ""
         docs_path = ""
@@ -1077,6 +1188,11 @@ class MainWindow(QMainWindow):
             config_ok = False
             config_error = "no deck entries found"
 
+        manifest_path = aircraft_dir / "manifest.yaml"
+        if manifest_path.is_file():
+            meta = self._parse_simple_yaml_meta(manifest_path)
+            version = (meta.get("version") or "").strip()
+
         docs_snippets: list[str] = []
         docs_notes: list[str] = []
         for deck_name, layout_name in deck_layouts:
@@ -1108,6 +1224,7 @@ class MainWindow(QMainWindow):
             deck_names=deck_names,
             config_ok=config_ok,
             config_error=config_error,
+            version=version,
             docs_title=docs_title,
             docs_summary=docs_summary,
             docs_path=docs_path,
@@ -1146,78 +1263,153 @@ class MainWindow(QMainWindow):
         return targets
 
     def _refresh_launch_targets(self) -> None:
-        selected = self.launch_target_combo.currentData() or self._configured_launch_target()
+        selected = self._configured_launch_target()
         self._launch_targets = self._discover_launch_targets()
-
-        self.launch_target_combo.blockSignals(True)
-        self.launch_target_combo.clear()
-        self.launch_target_combo.addItem("Auto / simulator-selected", "")
-        for info in self._launch_targets:
-            self.launch_target_combo.addItem(self._launch_target_label(info), info.path)
-
-        index = 0
-        if selected:
-            for idx in range(1, self.launch_target_combo.count()):
-                if self.launch_target_combo.itemData(idx) == selected:
-                    index = idx
-                    break
-            else:
-                missing_label = f"Missing target  ·  {_shorten_filesystem_path(selected, max_len=78)}"
-                self.launch_target_combo.addItem(missing_label, selected)
-                index = self.launch_target_combo.count() - 1
-        self.launch_target_combo.setCurrentIndex(index)
-        self.launch_target_combo.blockSignals(False)
-
-        found = len(self._launch_targets)
-        roots = len(self._cockpitdecks_search_roots())
-        self.launch_target_combo.setToolTip(
-            f"Optional aircraft/deckconfig target discovered from COCKPITDECKS_PATH.\n"
-            f"Found {found} target(s) across {roots} search root(s)."
-        )
         self._populate_decks_list()
 
     def _selected_launch_target(self) -> Path | None:
-        raw = (self.launch_target_combo.currentData() or "").strip()
+        raw = self._configured_launch_target()
         return Path(raw) if raw else None
 
-    def _on_launch_target_changed(self, _index: int) -> None:
-        selected = (self.launch_target_combo.currentData() or "").strip()
-        save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=selected))
-        self._select_decks_item_by_path(selected)
-        self.refresh_info_panel()
-
-    def _decks_filter_text(self) -> str:
-        return self.ed_decks_filter.text().strip().lower() if hasattr(self, "ed_decks_filter") else ""
-
     def _matching_launch_targets(self) -> list[LaunchTargetInfo]:
-        query = self._decks_filter_text()
-        if not query:
-            return list(self._launch_targets)
-        matches: list[LaunchTargetInfo] = []
-        for info in self._launch_targets:
-            haystacks = [
-                info.aircraft_name.lower(),
-                info.path.lower(),
-                " ".join(name.lower() for name in info.deck_names),
-            ]
-            if any(query in hay for hay in haystacks):
-                matches.append(info)
-        return matches
+        return list(self._launch_targets)
 
     def _render_target_item_text(self, info: LaunchTargetInfo) -> str:
         deck_desc = ", ".join(info.deck_names[:4]) if info.deck_names else "No deck names parsed"
         if len(info.deck_names) > 4:
             deck_desc += "…"
         status = "Ready" if info.config_ok else f"Needs review ({info.config_error})"
+        source = self._source_label(info)
         text = (
             f"{info.aircraft_name}\n"
-            f"{info.deck_count} deck(s)  |  {deck_desc}\n"
+            f"{info.deck_count} deck(s)  |  {source}\n"
+            f"{deck_desc}\n"
             f"{_shorten_filesystem_path(info.path, max_len=100)}\n"
             f"{status}"
         )
         if info.docs_summary:
             text += f"\nDocs: {info.docs_summary}"
         return text
+
+    def _build_deck_item_widget(self, info: LaunchTargetInfo, *, is_active: bool = False, is_selected: bool = False) -> QWidget:
+        source = self._source_label(info)
+        deck_desc = ", ".join(info.deck_names[:4]) if info.deck_names else "No deck names parsed"
+        if len(info.deck_names) > 4:
+            deck_desc += "…"
+        status_text = "Ready" if info.config_ok else f"Needs review: {info.config_error}"
+        managed = self._is_managed_target(info.path)
+
+        card = QFrame()
+        border = "#2563eb" if is_selected else "#dbe3ee"
+        bg = "#f8fbff" if is_selected else "#ffffff"
+        card.setStyleSheet(
+            f"QFrame {{ background: {bg}; border: 1px solid {border}; border-radius: 14px; }}"
+        )
+        root = QVBoxLayout(card)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+
+        title = QLabel(info.aircraft_name)
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #0f172a; border: none;")
+        top.addWidget(title, 1)
+
+        count_badge = QLabel(f"{info.deck_count} layout" + ("" if info.deck_count == 1 else "s"))
+        count_badge.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #475569; "
+            "background: #f1f5f9; border-radius: 999px; padding: 3px 8px; border: none;"
+        )
+        top.addWidget(count_badge, 0)
+
+        if is_active:
+            active_badge = QLabel("Active")
+            active_badge.setStyleSheet(
+                "font-size: 11px; font-weight: 700; color: #166534; "
+                "background: #dcfce7; border-radius: 999px; padding: 3px 8px; border: none;"
+            )
+            top.addWidget(active_badge, 0)
+
+        source_badge = QLabel("Imported" if managed else "Local")
+        source_bg = "#dbeafe" if managed else "#fef3c7"
+        source_fg = "#1d4ed8" if managed else "#92400e"
+        source_badge.setStyleSheet(
+            f"font-size: 11px; font-weight: 700; color: {source_fg}; "
+            f"background: {source_bg}; border-radius: 999px; padding: 3px 8px; border: none;"
+        )
+        top.addWidget(source_badge, 0)
+
+        version = str(info.version or "").strip()
+        if version:
+            version_badge = QLabel(version if version.startswith("v") else f"v{version}")
+            version_badge.setStyleSheet(
+                "font-size: 11px; font-weight: 700; color: #5b21b6; "
+                "background: #ede9fe; border-radius: 999px; padding: 3px 8px; border: none;"
+            )
+            top.addWidget(version_badge, 0)
+        root.addLayout(top)
+
+        meta = QLabel(source)
+        meta.setStyleSheet("font-size: 12px; color: #475569; border: none;")
+        names = QLabel(deck_desc)
+        names.setStyleSheet("font-size: 12px; color: #334155; border: none;")
+
+        path_label = QLabel(_shorten_filesystem_path(info.path, max_len=96))
+        path_label.setStyleSheet("font-size: 12px; color: #64748b; border: none;")
+
+        middle = QHBoxLayout()
+        middle.setContentsMargins(0, 0, 0, 0)
+        middle.setSpacing(16)
+
+        left_col = QVBoxLayout()
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.setSpacing(8)
+        left_col.addWidget(meta)
+        left_col.addWidget(names)
+        left_col.addWidget(path_label)
+        middle.addLayout(left_col, 3)
+
+        root.addLayout(middle)
+
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(8)
+
+        status = QLabel(status_text)
+        status_fg = "#166534" if info.config_ok else "#991b1b"
+        status_bg = "#f0fdf4" if info.config_ok else "#fef2f2"
+        status.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        status.setStyleSheet(
+            f"font-size: 11px; font-weight: 600; color: {status_fg}; "
+            f"background: {status_bg}; border-radius: 8px; padding: 4px 10px 5px 10px; border: none;"
+        )
+        bottom.addWidget(status, 0)
+        bottom.addStretch(1)
+
+        root.addLayout(bottom)
+        return card
+
+    def _refresh_deck_item_widgets(self) -> None:
+        if not hasattr(self, "decks_list"):
+            return
+        active_path = self._configured_launch_target()
+        selected_path = self._selected_decks_target_path()
+        for idx in range(self.decks_list.count()):
+            item = self.decks_list.item(idx)
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            info = next((t for t in self._launch_targets if t.path == path), None)
+            if info is None:
+                continue
+            widget = self._build_deck_item_widget(
+                info,
+                is_active=(path == active_path),
+                is_selected=(path == selected_path),
+            )
+            widget.adjustSize()
+            item.setSizeHint(widget.sizeHint() + QSize(0, 10))
+            self.decks_list.setItemWidget(item, widget)
 
     def _populate_decks_list(self) -> None:
         if not hasattr(self, "decks_list"):
@@ -1227,16 +1419,21 @@ class MainWindow(QMainWindow):
         self.decks_list.clear()
         matching = self._matching_launch_targets()
         for info in matching:
-            item = QListWidgetItem(self._render_target_item_text(info))
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, info.path)
             item.setToolTip(
                 f"Aircraft: {info.aircraft_name}\n"
+                f"Source: {self._source_label(info)}\n"
                 f"Decks: {', '.join(info.deck_names) if info.deck_names else '—'}\n"
                 f"Path: {info.path}"
                 + (f"\nDocs: {info.docs_summary}" if info.docs_summary else "")
                 + (f"\nDocs file: {info.docs_path}" if info.docs_path else "")
             )
             self.decks_list.addItem(item)
+            widget = self._build_deck_item_widget(info, is_active=(info.path == selected_path))
+            widget.adjustSize()
+            item.setSizeHint(widget.sizeHint() + QSize(0, 10))
+            self.decks_list.setItemWidget(item, widget)
         self._select_decks_item_by_path(selected_path)
         total = len(self._launch_targets)
         shown = len(matching)
@@ -1256,6 +1453,7 @@ class MainWindow(QMainWindow):
                     self.decks_list.setCurrentItem(item)
                     break
         self.decks_list.blockSignals(False)
+        self._refresh_deck_item_widgets()
         self._update_decks_actions()
 
     def _selected_decks_target_path(self) -> str:
@@ -1270,20 +1468,12 @@ class MainWindow(QMainWindow):
         selected = self._selected_decks_target_path()
         has_selected = bool(selected)
         self.btn_decks_select.setEnabled(has_selected)
-        self.btn_decks_launch.setEnabled(has_selected and not self._command_worker_busy())
         self.btn_decks_reveal.setEnabled(has_selected)
+        self._refresh_deck_item_widgets()
 
     def _select_launch_target(self, path: str) -> None:
-        self.launch_target_combo.blockSignals(True)
-        index = 0
-        if path:
-            for idx in range(1, self.launch_target_combo.count()):
-                if self.launch_target_combo.itemData(idx) == path:
-                    index = idx
-                    break
-        self.launch_target_combo.setCurrentIndex(index)
-        self.launch_target_combo.blockSignals(False)
         save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=path))
+        self.settings_form.reload_from_disk()
         self._select_decks_item_by_path(path)
         self.refresh_info_panel()
 
@@ -1297,13 +1487,6 @@ class MainWindow(QMainWindow):
     def _use_auto_launch_target(self) -> None:
         self._select_launch_target("")
         self._append("[ok] launch target cleared; using auto / simulator-selected mode")
-
-    def _launch_selected_decks_target(self) -> None:
-        path = self._selected_decks_target_path()
-        if not path:
-            return
-        self._select_launch_target(path)
-        self.start_cockpitdecks()
 
     def _reveal_selected_decks_target(self) -> None:
         path = self._selected_decks_target_path()

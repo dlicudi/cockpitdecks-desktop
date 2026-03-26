@@ -47,6 +47,10 @@ def settings_path() -> Path:
     return _config_dir() / "settings.json"
 
 
+def managed_decks_dir() -> Path:
+    return _config_dir() / "decks"
+
+
 def load() -> dict[str, str]:
     path = settings_path()
     data: dict[str, str] = {k: str(v) for k, v in DEFAULTS.items()}
