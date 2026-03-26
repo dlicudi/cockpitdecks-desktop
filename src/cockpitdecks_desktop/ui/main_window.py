@@ -57,6 +57,7 @@ from cockpitdecks_desktop.services.live_apis import (
 )
 from cockpitdecks_desktop.services.process_runner import stream_shell_command
 from cockpitdecks_desktop.ui.app_style import MAIN_WINDOW_QSS
+from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 
 
@@ -147,30 +148,14 @@ class MainWindow(QMainWindow):
         self.info_last_check = QLabel("—")
         self.info_runtime_metrics = QLabel("—")
         self.info_diag_warning = QLabel("—")
-        self.diag_health_launcher = QLabel("—")
-        self.diag_health_cockpit = QLabel("—")
-        self.diag_health_xplane = QLabel("—")
         self.diag_health_runtime = QLabel("—")
-        self.diag_launcher_path = QLabel("—")
-        self.diag_launch_log_path = QLabel("—")
-        self.diag_crash_log_path = QLabel("—")
-        self.diag_target = QLabel("—")
-        self.diag_session = QLabel("—")
-        self.diag_web = QLabel("—")
-        self.diag_xplane = QLabel("—")
-        self.diag_metrics = QLabel("—")
-        self.diag_last_exit = QLabel("—")
-        self.diag_runtime_rates = QLabel("—")
-        self.diag_runtime_batching = QLabel("—")
+
         _val_style = "font-size: 13px; border: none; padding: 0;"
         for lab in (
             self.info_desktop, self.info_launcher, self.info_xplane,
             self.info_cockpit_web, self.info_session, self.info_live_poll_at,
             self.info_last_check, self.info_runtime_metrics, self.info_diag_warning,
-            self.diag_health_launcher, self.diag_health_cockpit, self.diag_health_xplane, self.diag_health_runtime,
-            self.diag_launcher_path, self.diag_launch_log_path, self.diag_crash_log_path, self.diag_target,
-            self.diag_session, self.diag_web, self.diag_xplane, self.diag_metrics, self.diag_last_exit,
-            self.diag_runtime_rates, self.diag_runtime_batching,
+            self.diag_health_runtime,
         ):
             lab.setWordWrap(False)
             lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -527,81 +512,8 @@ class MainWindow(QMainWindow):
         # ════════════════════════════════════════
         #  DIAGNOSTICS TAB
         # ════════════════════════════════════════
-        tab_diag = QWidget()
-        tab_diag_layout = QVBoxLayout(tab_diag)
-        tab_diag_layout.setContentsMargins(0, 0, 0, 0)
-        tab_diag_layout.setSpacing(0)
-
-        diag_inner = QWidget()
-        di = QVBoxLayout(diag_inner)
-        di.setContentsMargins(20, 16, 20, 20)
-        di.setSpacing(12)
-
-        diag_intro = QLabel(
-            "Operational diagnostics for launcher startup, Cockpitdecks connectivity, X-Plane API reachability, "
-            "and runtime pressure. Use this tab when the app is slow, disconnected, or failing to start."
-        )
-        diag_intro.setWordWrap(True)
-        diag_intro.setStyleSheet("font-size: 13px; color: #475569; border: none;")
-        di.addWidget(diag_intro)
-
-        startup_card = _card(bg="#fafafa", border="#e5e7eb")
-        startup_layout = QVBoxLayout(startup_card)
-        startup_layout.setContentsMargins(16, 14, 16, 14)
-        startup_layout.setSpacing(8)
-        startup_layout.addWidget(_section_heading("Startup"))
-        startup_layout.addWidget(_kv_row("Launcher", self.diag_launcher_path))
-        startup_layout.addWidget(_kv_row("Target", self.diag_target))
-        startup_layout.addWidget(_kv_row("Launch Log", self.diag_launch_log_path))
-        startup_layout.addWidget(_kv_row("Crash Log", self.diag_crash_log_path))
-        startup_layout.addWidget(_kv_row("Last Exit", self.diag_last_exit))
-        di.addWidget(startup_card)
-
-        probe_card = _card()
-        probe_layout = QVBoxLayout(probe_card)
-        probe_layout.setContentsMargins(16, 14, 16, 14)
-        probe_layout.setSpacing(8)
-        probe_layout.addWidget(_section_heading("Checks"))
-        probe_layout.addWidget(_kv_row("Cockpit Web", self.diag_web))
-        probe_layout.addWidget(_kv_row("/desktop-status", self.diag_session))
-        probe_layout.addWidget(_kv_row("/desktop-metrics", self.diag_metrics))
-        probe_layout.addWidget(_kv_row("X-Plane API", self.diag_xplane))
-        di.addWidget(probe_card)
-
-        runtime_card = _card()
-        runtime_layout = QVBoxLayout(runtime_card)
-        runtime_layout.setContentsMargins(16, 14, 16, 14)
-        runtime_layout.setSpacing(8)
-        runtime_layout.addWidget(_section_heading("Runtime Pressure"))
-        runtime_layout.addWidget(_kv_row("Summary", self.diag_health_runtime))
-        runtime_layout.addWidget(_kv_row("Rates", self.diag_runtime_rates))
-        runtime_layout.addWidget(_kv_row("Batching", self.diag_runtime_batching))
-        runtime_layout.addWidget(_kv_row("Last Check", self.info_last_check))
-        di.addWidget(runtime_card)
-
-        actions_card = _card(bg="#fafafa", border="#e5e7eb")
-        actions_layout = QVBoxLayout(actions_card)
-        actions_layout.setContentsMargins(16, 14, 16, 14)
-        actions_layout.setSpacing(10)
-        actions_layout.addWidget(_section_heading("Actions"))
-        diag_actions = QHBoxLayout()
-        diag_actions.setSpacing(8)
-        self.btn_diag_refresh = QPushButton("Refresh Status")
-        self.btn_diag_check = QPushButton("Run Checks")
-        self.btn_diag_export = QPushButton("Export Bundle")
-        for b in (self.btn_diag_refresh, self.btn_diag_check, self.btn_diag_export):
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            diag_actions.addWidget(b)
-        diag_actions.addStretch(1)
-        actions_layout.addLayout(diag_actions)
-        di.addWidget(actions_card)
-
-        diag_scroll = QScrollArea()
-        diag_scroll.setWidgetResizable(True)
-        diag_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        diag_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        diag_scroll.setWidget(diag_inner)
-        tab_diag_layout.addWidget(diag_scroll, 1)
+        self.diag_tab = DiagnosticsTab()
+        tab_diag = self.diag_tab
 
         # ════════════════════════════════════════
         #  DECKS TAB
@@ -765,9 +677,9 @@ class MainWindow(QMainWindow):
         self.btn_refresh.clicked.connect(self.refresh_info_panel)
         self.btn_check.clicked.connect(self.run_preflight)
         self.btn_export_diag.clicked.connect(self.export_diagnostics_bundle)
-        self.btn_diag_refresh.clicked.connect(self.refresh_info_panel)
-        self.btn_diag_check.clicked.connect(self.run_preflight)
-        self.btn_diag_export.clicked.connect(self.export_diagnostics_bundle)
+        self.diag_tab.refresh_clicked.connect(self.refresh_info_panel)
+        self.diag_tab.check_clicked.connect(self.run_preflight)
+        self.diag_tab.export_clicked.connect(self.export_diagnostics_bundle)
         self.btn_update.clicked.connect(self.check_updates)
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
@@ -1634,58 +1546,69 @@ class MainWindow(QMainWindow):
         web_base = cockpit_web_base(settings)
         xp_base = xplane_rest_base(settings)
 
+        # ── Health badges ──
         if not launcher.exists():
-            launcher_health = "Missing"
+            launcher_health, launcher_level = "Missing", "error"
         elif launcher_running:
-            launcher_health = "Running"
+            launcher_health, launcher_level = "Running", "ok"
         elif self._last_launcher_exit_code not in (None, 0):
-            launcher_health = f"Exited ({self._last_launcher_exit_code})"
+            launcher_health, launcher_level = f"Exited ({self._last_launcher_exit_code})", "error"
         elif listener is not None:
-            launcher_health = f"Ready / port {self._web_listen_port()} in use"
+            launcher_health, launcher_level = f"Port {self._web_listen_port()} in use", "warn"
         else:
-            launcher_health = "Ready"
+            launcher_health, launcher_level = "Ready", "neutral"
 
-        cockpit_health = self.info_cockpit_web.text()
+        cockpit_text = self.info_cockpit_web.text()
         if self._last_session_info is not None and self._last_session_info.ok:
-            cockpit_health = f"OK | {self._last_session_info.aircraft}"
+            cockpit_text = f"OK | {self._last_session_info.aircraft}"
+        cockpit_level = "ok" if "ok" in cockpit_text.lower() else ("error" if "unreachable" in cockpit_text.lower() else "neutral")
 
-        self.diag_health_launcher.setText(launcher_health)
-        self.diag_health_cockpit.setText(cockpit_health)
-        self.diag_health_xplane.setText(self.info_xplane.text())
+        xp_text = self.info_xplane.text()
+        xp_level = "ok" if "v" in xp_text.lower() and "unreachable" not in xp_text.lower() else ("error" if "unreachable" in xp_text.lower() else "neutral")
 
-        self.diag_launcher_path.setText(f"{launcher_health} | {_shorten_filesystem_path(launcher, max_len=80)}")
-        self.diag_launch_log_path.setText(_shorten_filesystem_path(launch_log, max_len=96) if launch_log else "Not configured")
-        self.diag_crash_log_path.setText(
-            f"{_shorten_filesystem_path(crash_log, max_len=80)}"
-            + (" | present" if crash_log.exists() else " | none yet")
-        )
-        self.diag_target.setText(_shorten_filesystem_path(target, max_len=96) if target else "Auto / simulator-selected")
-        self.diag_web.setText(f"{web_base}/ -> {self.info_cockpit_web.text()}")
-        self.diag_session.setText(f"{web_base}/desktop-status -> {self.info_session.text()}")
-        self.diag_metrics.setText(f"{web_base}/desktop-metrics -> {self.info_runtime_metrics.text()}")
-        self.diag_xplane.setText(f"{xp_base} -> {self.info_xplane.text()}")
-        self.diag_last_exit.setText(str(self._last_launcher_exit_code) if self._last_launcher_exit_code is not None else "—")
-        self.diag_runtime_rates.setText(
-            f"WS {self.metric_ws_rate.text()}/s | Dataref {self.metric_dataref_rate.text()}/s | Render {self.metric_dirty_rendered.text()}/s"
-        )
-        self.diag_runtime_batching.setText(
-            f"Queue {self.metric_queue_depth.text()} | Marks/flush {self.metric_marks_per_flush.text()} | Uptime {self.metric_uptime.text()}"
+        self.diag_tab.update_health(launcher_health, launcher_level, cockpit_text, cockpit_level, xp_text, xp_level)
+
+        # ── Connectivity checks ──
+        def _check_ok(text: str) -> bool | None:
+            t = text.lower()
+            if "unreachable" in t or "error" in t or "refused" in t:
+                return False
+            if "ok" in t or "v1" in t or "v2" in t or "v3" in t or text.strip() not in ("—", "…", ""):
+                return True
+            return None
+
+        web_text = f"{web_base}/ -> {self.info_cockpit_web.text()}"
+        status_text = f"{web_base}/desktop-status -> {self.info_session.text()}"
+        metrics_text = f"{web_base}/desktop-metrics -> {self.info_runtime_metrics.text()}"
+        xplane_text = f"{xp_base} -> {self.info_xplane.text()}"
+        self.diag_tab.update_checks(
+            web_text, _check_ok(self.info_cockpit_web.text()),
+            status_text, _check_ok(self.info_session.text()),
+            metrics_text, _check_ok(self.info_runtime_metrics.text()),
+            xplane_text, _check_ok(self.info_xplane.text()),
         )
 
-        for lab in (
-            self.diag_launcher_path,
-            self.diag_launch_log_path,
-            self.diag_crash_log_path,
-            self.diag_target,
-            self.diag_web,
-            self.diag_session,
-            self.diag_xplane,
-            self.diag_metrics,
-            self.diag_last_exit,
-            self.diag_runtime_rates,
-            self.diag_runtime_batching,
-        ):
-            self._style_status_value(lab, lab.text())
+        # ── Runtime pressure ──
+        queue_text = self.metric_queue_depth.text()
+        queue_depth = int(queue_text) if queue_text not in ("—", "") else None
+        self.diag_tab.update_pressure(
+            queue_depth=queue_depth,
+            queue_status=self.diag_health_runtime.text(),
+            ws_rate=self.metric_ws_rate.text(),
+            dataref_rate=self.metric_dataref_rate.text(),
+            render_rate=self.metric_dirty_rendered.text(),
+            marks_per_flush=self.metric_marks_per_flush.text(),
+            uptime=self.metric_uptime.text(),
+        )
+
+        # ── Startup details ──
+        self.diag_tab.update_startup(
+            launcher=f"{launcher_health} | {_shorten_filesystem_path(launcher, max_len=80)}",
+            target=_shorten_filesystem_path(target, max_len=96) if target else "Auto / simulator-selected",
+            log=_shorten_filesystem_path(launch_log, max_len=96) if launch_log else "Not configured",
+            crash=(_shorten_filesystem_path(crash_log, max_len=80) + (" | present" if crash_log.exists() else " | none yet")),
+            exit_code=str(self._last_launcher_exit_code) if self._last_launcher_exit_code is not None else "—",
+        )
 
     def _build_diagnostics_bundle(self) -> dict:
         settings = load_desktop_settings()
@@ -1757,6 +1680,7 @@ class MainWindow(QMainWindow):
             self._prev_dirty_flushes = None
             self._prev_rate_poll_ts = None
             self._update_diagnostics_warning(None)
+            self._update_latency_display(None)
             return
 
         p = metrics.get("process") if isinstance(metrics.get("process"), dict) else {}
@@ -1866,6 +1790,19 @@ class MainWindow(QMainWindow):
         else:
             self.metric_uptime.setText("—")
         self._update_diagnostics_warning(metrics)
+        self._update_latency_display(metrics)
+
+    def _update_latency_display(self, metrics: dict | None) -> None:
+        """Update latency gauges and thread breakdown on the diagnostics tab."""
+        self.diag_tab.update_latency(metrics)
+
+        # Thread breakdown
+        if isinstance(metrics, dict):
+            diag = metrics.get("diagnostics") if isinstance(metrics.get("diagnostics"), dict) else {}
+            threads = diag.get("threads") if isinstance(diag.get("threads"), dict) else {}
+            self.diag_tab.update_threads(threads)
+        else:
+            self.diag_tab.update_threads({})
 
     def refresh_info_panel(self) -> None:
         ver = self._desktop_app_version()
