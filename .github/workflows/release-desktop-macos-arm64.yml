@@ -3,11 +3,11 @@ name: Release Desktop macOS arm64
 on:
   push:
     tags:
-      - "desktop-v*"
+      - "v*"
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Desktop release tag to publish (e.g. desktop-v0.2.1)"
+        description: "Release tag to publish (e.g. v0.2.1)"
         required: true
         type: string
       launcher_tag:
