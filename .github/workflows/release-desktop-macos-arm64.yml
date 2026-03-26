@@ -1,0 +1,216 @@
+name: Release Desktop macOS arm64
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Desktop release tag to publish (e.g. desktop-v0.2.1)"
+        required: true
+        type: string
+      launcher_tag:
+        description: "Bundled launcher release tag (optional override)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-macos-arm64-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout cockpitdecks-desktop
+        uses: actions/checkout@v4
+        with:
+          path: cockpitdecks-desktop
+          fetch-depth: 0
+
+      - name: Resolve release configuration
+        working-directory: cockpitdecks-desktop
+        env:
+          MANUAL_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          MANUAL_LAUNCHER_TAG: ${{ github.event.inputs.launcher_tag }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_TAG="${MANUAL_RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
+          if [[ -z "${RELEASE_TAG}" ]]; then
+            echo "::error::Unable to determine desktop release tag"
+            exit 1
+          fi
+
+          MANIFEST_PATH=".github/desktop-macos-arm64.env"
+          if [[ ! -f "${MANIFEST_PATH}" ]]; then
+            echo "::error::Missing manifest ${MANIFEST_PATH}"
+            exit 1
+          fi
+
+          set -a
+          source "${MANIFEST_PATH}"
+          set +a
+
+          if [[ -n "${MANUAL_LAUNCHER_TAG}" ]]; then
+            LAUNCHER_TAG="${MANUAL_LAUNCHER_TAG}"
+          fi
+
+          required_vars=(
+            LAUNCHER_REPOSITORY
+            LAUNCHER_TAG
+          )
+
+          for var_name in "${required_vars[@]}"; do
+            if [[ -z "${!var_name:-}" ]]; then
+              echo "::error::${var_name} is not set in ${MANIFEST_PATH}"
+              exit 1
+            fi
+          done
+
+          {
+            echo "RELEASE_TAG=${RELEASE_TAG}"
+            echo "LAUNCHER_MANIFEST_PATH=${MANIFEST_PATH}"
+            echo "LAUNCHER_REPOSITORY=${LAUNCHER_REPOSITORY}"
+            echo "LAUNCHER_TAG=${LAUNCHER_TAG}"
+          } >> "${GITHUB_ENV}"
+
+          {
+            echo "### Desktop release configuration"
+            echo
+            echo "- desktop release tag: \`${RELEASE_TAG}\`"
+            echo "- bundled launcher: \`${LAUNCHER_REPOSITORY}@${LAUNCHER_TAG}\`"
+            echo "- runner architecture: \`$(uname -m)\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('cockpitdecks-desktop/pyproject.toml', 'cockpitdecks-desktop/packaging/pyinstaller/desktop.spec', 'cockpitdecks-desktop/.github/desktop-macos-arm64.env') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Download launcher release assets
+        working-directory: cockpitdecks-desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .launcher-download
+          gh release download "${LAUNCHER_TAG}" \
+            --repo "${LAUNCHER_REPOSITORY}" \
+            --dir .launcher-download \
+            --pattern "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz" \
+            --pattern "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz.sha256"
+          cd .launcher-download
+          shasum -a 256 -c "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz.sha256"
+          tar -xzf "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz"
+          test -x "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}/cockpitdecks-launcher"
+
+      - name: Build desktop app
+        working-directory: cockpitdecks-desktop
+        env:
+          LAUNCHER_SRC: ${{ github.workspace }}/cockpitdecks-desktop/.launcher-download/cockpitdecks-launcher-macos-arm64-${{ env.LAUNCHER_TAG }}/cockpitdecks-launcher
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pyinstaller
+          scripts/build_desktop.sh
+
+      - name: Verify desktop app bundle
+        working-directory: cockpitdecks-desktop
+        run: |
+          test -d "dist/Cockpitdecks Desktop.app"
+          test -x "dist/Cockpitdecks Desktop.app/Contents/MacOS/cockpitdecks-desktop"
+          test -x "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher"
+          file "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher"
+          lipo -archs "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher" | grep -q "arm64"
+
+      - name: Write build metadata
+        working-directory: cockpitdecks-desktop
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from importlib import metadata
+
+          repo_path = os.getcwd()
+
+          def git(*args: str) -> str:
+              return subprocess.check_output(["git", "-C", repo_path, *args], text=True).strip()
+
+          metadata_doc = {
+              "release_tag": os.environ["RELEASE_TAG"],
+              "desktop_distribution_version": metadata.version("cockpitdecks-desktop"),
+              "desktop_commit": git("rev-parse", "HEAD"),
+              "desktop_describe": git("describe", "--tags", "--always"),
+              "launcher_repository": os.environ["LAUNCHER_REPOSITORY"],
+              "launcher_tag": os.environ["LAUNCHER_TAG"],
+              "github_event_name": os.environ.get("GITHUB_EVENT_NAME"),
+              "github_ref_name": os.environ.get("GITHUB_REF_NAME"),
+              "github_sha": os.environ.get("GITHUB_SHA"),
+              "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "github_repository": os.environ.get("GITHUB_REPOSITORY"),
+              "github_run_url": f"{os.environ.get('GITHUB_SERVER_URL')}/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",
+              "runner_architecture": subprocess.check_output(["uname", "-m"], text=True).strip(),
+          }
+
+          with open("build-metadata.json", "w", encoding="utf-8") as fh:
+              json.dump(metadata_doc, fh, indent=2, sort_keys=True)
+              fh.write("\n")
+          PY
+
+      - name: Package desktop artifact
+        working-directory: cockpitdecks-desktop
+        run: |
+          ARTIFACT_BASENAME="cockpitdecks-desktop-macos-arm64-${RELEASE_TAG}"
+          rm -rf "${ARTIFACT_BASENAME}"
+          mkdir -p "${ARTIFACT_BASENAME}"
+          cp -R "dist/Cockpitdecks Desktop.app" "${ARTIFACT_BASENAME}/"
+          cp build-metadata.json "${ARTIFACT_BASENAME}/"
+          tar -czf "${ARTIFACT_BASENAME}.tar.gz" "${ARTIFACT_BASENAME}"
+          shasum -a 256 "${ARTIFACT_BASENAME}.tar.gz" > "${ARTIFACT_BASENAME}.tar.gz.sha256"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}
+          path: |
+            cockpitdecks-desktop/cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}.tar.gz
+            cockpitdecks-desktop/cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}.tar.gz.sha256
+            cockpitdecks-desktop/build-metadata.json
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            cockpitdecks-desktop/cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}.tar.gz
+            cockpitdecks-desktop/cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}.tar.gz.sha256
+            cockpitdecks-desktop/build-metadata.json
+          generate_release_notes: true

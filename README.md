@@ -22,6 +22,20 @@ cockpitdecks-desktop
 scripts/build_desktop.sh
 ```
 
+`scripts/build_desktop.sh` bundles a `cockpitdecks-launcher` sidecar into the desktop app before running PyInstaller. By default it uses `../cockpitdecks/dist/cockpitdecks-launcher`, but you can override the source binary with `LAUNCHER_SRC=/path/to/cockpitdecks-launcher`.
+
+## Automated macOS Apple Silicon release
+
+GitHub Actions can build and publish a macOS arm64 desktop app from this repo, bundling a published launcher binary from the `cockpitdecks` GitHub releases.
+
+- Workflow: `.github/workflows/release-desktop-macos-arm64.yml`
+- Launcher manifest: `.github/desktop-macos-arm64.env`
+- Trigger: push a tag matching `desktop-v*`
+- Manual trigger: `workflow_dispatch` with required `release_tag` and optional `launcher_tag`
+- Output artifact: `cockpitdecks-desktop-macos-arm64-<tag>.tar.gz`
+
+The workflow downloads `cockpitdecks-launcher-macos-arm64-<launcher_tag>.tar.gz` from the configured launcher repository, verifies its SHA-256 checksum, unpacks `cockpitdecks-launcher`, bundles it into `Cockpitdecks Desktop.app`, and publishes the desktop artifact plus `build-metadata.json`.
+
 ## App icon
 
 Bundled at `src/cockpitdecks_desktop/resources/app_icon.png` (**square**, 1024×1024 recommended; dock / window icon; also passed to PyInstaller as `EXE(icon=…)` where supported). Widescreen masters are letterboxed by macOS with black bars — after replacing the PNG, run `python3 scripts/square_app_icon.py` from the repo root to rebuild a padded square from the average corner color.

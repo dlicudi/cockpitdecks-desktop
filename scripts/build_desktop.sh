@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 COCKPITDECKS_REPO="${COCKPITDECKS_REPO:-$HOME/GitHub/cockpitdecks}"
-LAUNCHER_SRC="$COCKPITDECKS_REPO/dist/cockpitdecks-launcher"
+LAUNCHER_SRC="${LAUNCHER_SRC:-$COCKPITDECKS_REPO/dist/cockpitdecks-launcher}"
 LAUNCHER_DST="$ROOT_DIR/resources/bin/cockpitdecks-launcher"
 LAUNCHER_BUILD_SCRIPT="$COCKPITDECKS_REPO/scripts/build_launcher.sh"
 
