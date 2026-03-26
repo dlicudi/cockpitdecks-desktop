@@ -137,9 +137,25 @@ jobs:
         run: |
           test -d "dist/Cockpitdecks Desktop.app"
           test -x "dist/Cockpitdecks Desktop.app/Contents/MacOS/cockpitdecks-desktop"
-          test -x "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher"
-          file "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher"
-          lipo -archs "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher" | grep -q "arm64"
+          LAUNCHER_BUNDLE_PATH=""
+          for candidate in \
+            "dist/Cockpitdecks Desktop.app/Contents/MacOS/cockpitdecks-launcher" \
+            "dist/Cockpitdecks Desktop.app/Contents/MacOS/resources/cockpitdecks-launcher" \
+            "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher"
+          do
+            if [[ -x "${candidate}" ]]; then
+              LAUNCHER_BUNDLE_PATH="${candidate}"
+              break
+            fi
+          done
+          if [[ -z "${LAUNCHER_BUNDLE_PATH}" ]]; then
+            echo "::error::Bundled launcher not found in desktop app"
+            find "dist/Cockpitdecks Desktop.app" -name 'cockpitdecks-launcher' -print
+            exit 1
+          fi
+          echo "[verify] bundled launcher: ${LAUNCHER_BUNDLE_PATH}"
+          file "${LAUNCHER_BUNDLE_PATH}"
+          lipo -archs "${LAUNCHER_BUNDLE_PATH}" | grep -q "arm64"
 
       - name: Write build metadata
         working-directory: cockpitdecks-desktop
