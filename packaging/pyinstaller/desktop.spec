@@ -50,6 +50,7 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
+    exclude_binaries=True,
     name="cockpitdecks-desktop",
     debug=False,
     bootloader_ignore_signals=False,
