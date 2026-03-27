@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cockpitdecks-desktop"
-version = "0.2.1-beta.2"
+version = "0.2.1-beta.3"
 description = "Desktop companion app for Cockpitdecks setup, updates, diagnostics, and launch."
 readme = "README.md"
 requires-python = ">=3.12"

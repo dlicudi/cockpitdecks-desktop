@@ -8,6 +8,7 @@ hiddenimports = [
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtWidgets",
+    "yaml",
 ]
 
 if sys.platform == "darwin":
@@ -81,7 +82,7 @@ if sys.platform == "darwin":
         bundle_identifier="com.cockpitdecks.desktop",
         info_plist={
             "CFBundleDisplayName": "Cockpitdecks Desktop",
-            "CFBundleShortVersionString": "0.2.1-beta.1",
+            "CFBundleShortVersionString": "0.2.1-beta.3",
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },
