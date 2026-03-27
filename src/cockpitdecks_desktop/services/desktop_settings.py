@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 # Keys written into the child process environment when launching cockpitdecks-launcher.
 LAUNCH_ENV_KEYS = (
-    "SIMULATOR_HOME",
     "COCKPITDECKS_PATH",
     "SIMULATOR_HOST",
     "API_HOST",
@@ -19,7 +18,6 @@ LAUNCH_ENV_KEYS = (
 )
 
 DEFAULTS: dict[str, str] = {
-    "SIMULATOR_HOME": "",
     "COCKPITDECKS_PATH": "",
     "COCKPITDECKS_TARGET": "",
     "SIMULATOR_HOST": "",

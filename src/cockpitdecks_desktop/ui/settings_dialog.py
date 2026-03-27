@@ -41,9 +41,9 @@ class SettingsFormWidget(QWidget):
             "Leave empty to use the bundled binary (frozen app) or <code>…/cockpitdecks/dist/cockpitdecks-launcher</code> in dev.<br><br>"
             "<b>Launch log</b> — optional file path where the desktop app appends the launcher / Cockpitdecks output it already shows on the Logs tab.<br><br>"
             "<b>Launch environment</b> (passed to cockpitdecks-launcher): "
-            "<code>SIMULATOR_HOME</code>, <code>COCKPITDECKS_PATH</code> (extra roots where Cockpitdecks looks for aircraft "
+            "<code>COCKPITDECKS_PATH</code> (roots where Cockpitdecks looks for aircraft "
             "folders containing <code>deckconfig</code>), optional <code>SIMULATOR_HOST</code>, "
-            "<code>API_HOST</code>/<code>API_PORT</code> for the X-Plane Web API.<br><br>"
+            "<code>API_HOST</code>/<code>API_PORT</code> for the X-Plane Web API (defaults to <code>127.0.0.1:8086</code>).<br><br>"
             "<b>Web host/port</b> at the bottom only affects this app’s live status polling — "
             "not the Cockpitdecks Flask bind (that comes from Cockpitdecks <code>environ.yaml</code> / defaults).<br><br>"
             "<i>Changes are saved automatically.</i>"
@@ -65,13 +65,6 @@ class SettingsFormWidget(QWidget):
         row_launch_log = QHBoxLayout()
         row_launch_log.addWidget(self.ed_launch_log, 1)
         row_launch_log.addWidget(btn_launch_log)
-
-        self.ed_xp_home = QLineEdit(data.get("SIMULATOR_HOME", ""))
-        btn_browse = QPushButton("Browse…")
-        btn_browse.clicked.connect(self._browse_xp)
-        row_xp = QHBoxLayout()
-        row_xp.addWidget(self.ed_xp_home, 1)
-        row_xp.addWidget(btn_browse)
 
         self.list_cd_path = QListWidget()
         self.list_cd_path.setMinimumHeight(110)
@@ -112,7 +105,6 @@ class SettingsFormWidget(QWidget):
         form = QFormLayout()
         form.addRow("cockpitdecks-launcher path (optional)", row_launcher)
         form.addRow("Launch log path (optional)", row_launch_log)
-        form.addRow("SIMULATOR_HOME (X-Plane install)", row_xp)
         form.addRow("COCKPITDECKS_PATH (deck search roots)", cd_wrap)
         form.addRow("SIMULATOR_HOST (optional, remote)", self.ed_sim_host)
         form.addRow("API_HOST", self.ed_api_host)
@@ -132,7 +124,6 @@ class SettingsFormWidget(QWidget):
         for ed in (
             self.ed_launcher,
             self.ed_launch_log,
-            self.ed_xp_home,
             self.ed_sim_host,
             self.ed_api_host,
             self.ed_api_port,
@@ -183,11 +174,6 @@ class SettingsFormWidget(QWidget):
         if path:
             self.ed_launch_log.setText(path)
 
-    def _browse_xp(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Select X-Plane installation folder", str(Path.home()))
-        if d:
-            self.ed_xp_home.setText(d)
-
     def _browse_cd_path_add(self) -> None:
         start = str(Path.home() / "GitHub" / "cockpitdecks-configs" / "decks")
         if not Path(start).is_dir():
@@ -219,7 +205,6 @@ class SettingsFormWidget(QWidget):
         pairs: list[tuple[QLineEdit, str]] = [
             (self.ed_launcher, data.get("COCKPITDECKS_LAUNCHER_PATH", "")),
             (self.ed_launch_log, data.get("COCKPITDECKS_LAUNCH_LOG_PATH", "")),
-            (self.ed_xp_home, data.get("SIMULATOR_HOME", "")),
             (self.ed_sim_host, data.get("SIMULATOR_HOST", "")),
             (self.ed_api_host, data.get("API_HOST", "127.0.0.1")),
             (self.ed_api_port, data.get("API_PORT", "8086")),
@@ -239,7 +224,6 @@ class SettingsFormWidget(QWidget):
         return {
             "COCKPITDECKS_LAUNCHER_PATH": self.ed_launcher.text().strip(),
             "COCKPITDECKS_LAUNCH_LOG_PATH": self.ed_launch_log.text().strip(),
-            "SIMULATOR_HOME": self.ed_xp_home.text().strip(),
             "COCKPITDECKS_PATH": stored_cd,
             "SIMULATOR_HOST": self.ed_sim_host.text().strip(),
             "API_HOST": self.ed_api_host.text().strip(),

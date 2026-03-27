@@ -138,7 +138,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Cockpitdecks Desktop")
+        from cockpitdecks_desktop import __version__
+        self.setWindowTitle(f"Cockpitdecks Desktop {__version__}")
         self.resize(980, 680)
         self._thread: QThread | None = None
         self._worker: CommandWorker | None = None

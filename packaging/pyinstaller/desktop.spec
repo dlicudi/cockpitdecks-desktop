@@ -82,7 +82,7 @@ if sys.platform == "darwin":
         bundle_identifier="com.cockpitdecks.desktop",
         info_plist={
             "CFBundleDisplayName": "Cockpitdecks Desktop",
-            "CFBundleShortVersionString": "0.2.1-beta.4",
+            "CFBundleShortVersionString": "0.2.1-beta.5",
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },
