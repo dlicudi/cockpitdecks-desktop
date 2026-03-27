@@ -115,17 +115,17 @@ jobs:
           gh release download "${LAUNCHER_TAG}" \
             --repo "${LAUNCHER_REPOSITORY}" \
             --dir .launcher-download \
-            --pattern "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz" \
-            --pattern "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz.sha256"
+            --pattern "cockpitdecks-macos-arm64-${LAUNCHER_TAG}.tar.gz" \
+            --pattern "cockpitdecks-macos-arm64-${LAUNCHER_TAG}.tar.gz.sha256"
           cd .launcher-download
-          shasum -a 256 -c "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz.sha256"
-          tar -xzf "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}.tar.gz"
-          test -x "cockpitdecks-launcher-macos-arm64-${LAUNCHER_TAG}/cockpitdecks-launcher"
+          shasum -a 256 -c "cockpitdecks-macos-arm64-${LAUNCHER_TAG}.tar.gz.sha256"
+          tar -xzf "cockpitdecks-macos-arm64-${LAUNCHER_TAG}.tar.gz"
+          test -x "cockpitdecks-macos-arm64-${LAUNCHER_TAG}/cockpitdecks"
 
       - name: Build desktop app
         working-directory: cockpitdecks-desktop
         env:
-          LAUNCHER_SRC: ${{ github.workspace }}/cockpitdecks-desktop/.launcher-download/cockpitdecks-launcher-macos-arm64-${{ env.LAUNCHER_TAG }}/cockpitdecks-launcher
+          LAUNCHER_SRC: ${{ github.workspace }}/cockpitdecks-desktop/.launcher-download/cockpitdecks-macos-arm64-${{ env.LAUNCHER_TAG }}/cockpitdecks
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
@@ -139,9 +139,9 @@ jobs:
           test -x "dist/Cockpitdecks Desktop.app/Contents/MacOS/cockpitdecks-desktop"
           LAUNCHER_BUNDLE_PATH=""
           for candidate in \
-            "dist/Cockpitdecks Desktop.app/Contents/MacOS/cockpitdecks-launcher" \
-            "dist/Cockpitdecks Desktop.app/Contents/MacOS/resources/cockpitdecks-launcher" \
-            "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks-launcher"
+            "dist/Cockpitdecks Desktop.app/Contents/MacOS/cockpitdecks" \
+            "dist/Cockpitdecks Desktop.app/Contents/MacOS/resources/cockpitdecks" \
+            "dist/Cockpitdecks Desktop.app/Contents/Resources/cockpitdecks"
           do
             if [[ -x "${candidate}" ]]; then
               LAUNCHER_BUNDLE_PATH="${candidate}"

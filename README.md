@@ -22,7 +22,7 @@ cockpitdecks-desktop
 scripts/build_desktop.sh
 ```
 
-`scripts/build_desktop.sh` bundles a `cockpitdecks-launcher` sidecar into the desktop app before running PyInstaller. By default it uses `../cockpitdecks/dist/cockpitdecks-launcher`, but you can override the source binary with `LAUNCHER_SRC=/path/to/cockpitdecks-launcher`.
+`scripts/build_desktop.sh` bundles a `cockpitdecks` sidecar into the desktop app before running PyInstaller. By default it uses `../cockpitdecks/dist/cockpitdecks`, but you can override the source binary with `LAUNCHER_SRC=/path/to/cockpitdecks`.
 
 ## Automated macOS Apple Silicon release
 
@@ -34,7 +34,7 @@ GitHub Actions can build and publish a macOS arm64 desktop app from this repo, b
 - Manual trigger: `workflow_dispatch` with required `release_tag` and optional `launcher_tag`
 - Output artifact: `cockpitdecks-desktop-macos-arm64-<tag>.tar.gz`
 
-The workflow downloads `cockpitdecks-launcher-macos-arm64-<launcher_tag>.tar.gz` from the configured launcher repository, verifies its SHA-256 checksum, unpacks `cockpitdecks-launcher`, bundles it into `Cockpitdecks Desktop.app`, and publishes the desktop artifact plus `build-metadata.json`.
+The workflow downloads `cockpitdecks-macos-arm64-<launcher_tag>.tar.gz` from the configured launcher repository, verifies its SHA-256 checksum, unpacks `cockpitdecks`, bundles it into `Cockpitdecks Desktop.app`, and publishes the desktop artifact plus `build-metadata.json`.
 
 ## App icon
 

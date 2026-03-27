@@ -20,7 +20,7 @@ if sys.platform == "darwin":
 block_cipher = None
 
 ROOT = Path(os.getcwd()).resolve()
-LAUNCHER_SIDECAR = ROOT / "resources" / "bin" / "cockpitdecks-launcher"
+LAUNCHER_SIDECAR = ROOT / "resources" / "bin" / "cockpitdecks"
 
 ICON_PNG = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.png"
 ICON_ICNS = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.icns"

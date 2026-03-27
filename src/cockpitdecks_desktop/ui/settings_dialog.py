@@ -37,10 +37,10 @@ class SettingsFormWidget(QWidget):
         data = data if data is not None else desktop_settings.load()
 
         intro = QLabel(
-            "<b>Launcher</b> — optional full path to <code>cockpitdecks-launcher</code>. "
-            "Leave empty to use the bundled binary (frozen app) or <code>…/cockpitdecks/dist/cockpitdecks-launcher</code> in dev.<br><br>"
-            "<b>Launch log</b> — optional file path where the desktop app appends the launcher / Cockpitdecks output it already shows on the Logs tab.<br><br>"
-            "<b>Launch environment</b> (passed to cockpitdecks-launcher): "
+            "<b>Executable</b> — optional full path to <code>cockpitdecks</code>. "
+            "Leave empty to use the bundled binary (frozen app) or <code>…/cockpitdecks/dist/cockpitdecks</code> in dev.<br><br>"
+            "<b>Launch log</b> — optional file path where the desktop app appends the executable / Cockpitdecks output it already shows on the Logs tab.<br><br>"
+            "<b>Launch environment</b> (passed to cockpitdecks): "
             "<code>COCKPITDECKS_PATH</code> (roots where Cockpitdecks looks for aircraft "
             "folders containing <code>deckconfig</code>), optional <code>SIMULATOR_HOST</code>, "
             "<code>API_HOST</code>/<code>API_PORT</code> for the X-Plane Web API (defaults to <code>127.0.0.1:8086</code>).<br><br>"
@@ -103,7 +103,7 @@ class SettingsFormWidget(QWidget):
         self.ed_web_port = QLineEdit(data.get("COCKPIT_WEB_PORT", "7777"))
 
         form = QFormLayout()
-        form.addRow("cockpitdecks-launcher path (optional)", row_launcher)
+        form.addRow("cockpitdecks path (optional)", row_launcher)
         form.addRow("Launch log path (optional)", row_launch_log)
         form.addRow("COCKPITDECKS_PATH (deck search roots)", cd_wrap)
         form.addRow("SIMULATOR_HOST (optional, remote)", self.ed_sim_host)
@@ -157,9 +157,9 @@ class SettingsFormWidget(QWidget):
     def _browse_launcher(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select cockpitdecks-launcher",
+            "Select cockpitdecks",
             str(Path.home() / "GitHub" / "cockpitdecks" / "dist"),
-            "cockpitdecks-launcher (cockpitdecks-launcher cockpitdecks-launcher.exe);;All files (*)",
+            "cockpitdecks (cockpitdecks cockpitdecks.exe);;All files (*)",
         )
         if path:
             self.ed_launcher.setText(path)

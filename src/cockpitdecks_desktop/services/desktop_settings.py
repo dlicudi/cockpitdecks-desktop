@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from pathlib import Path
-# Keys written into the child process environment when launching cockpitdecks-launcher.
+# Keys written into the child process environment when launching cockpitdecks.
 LAUNCH_ENV_KEYS = (
     "COCKPITDECKS_PATH",
     "SIMULATOR_HOST",
@@ -25,7 +25,7 @@ DEFAULTS: dict[str, str] = {
     "API_PORT": "8086",
     "COCKPIT_WEB_HOST": "127.0.0.1",
     "COCKPIT_WEB_PORT": "7777",
-    # Desktop app only: optional path to cockpitdecks-launcher (empty = bundled or dev default).
+    # Desktop app only: optional path to cockpitdecks (empty = bundled or dev default).
     "COCKPITDECKS_LAUNCHER_PATH": "",
     # Desktop app only: optional file to append launcher/Cockpitdecks stdout/stderr.
     "COCKPITDECKS_LAUNCH_LOG_PATH": "",
@@ -72,7 +72,7 @@ def save(values: dict[str, str]) -> None:
 
 
 def launch_env_overlay(values: dict[str, str] | None = None) -> dict[str, str]:
-    """Environment variables to merge when spawning cockpitdecks-launcher."""
+    """Environment variables to merge when spawning cockpitdecks."""
     v = values or load()
     out: dict[str, str] = {}
     for key in LAUNCH_ENV_KEYS:

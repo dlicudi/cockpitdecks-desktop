@@ -1509,7 +1509,7 @@ class MainWindow(QMainWindow):
             self._append(f"[error] could not reveal target folder {target}: {exc}")
 
     def _resolve_launcher_binary(self) -> Path:
-        """Resolve cockpitdecks-launcher: Config override, else bundled (frozen), else dev dist."""
+        """Resolve cockpitdecks executable: Config override, else bundled (frozen), else dev dist."""
         override = launcher_binary_path(load_desktop_settings())
         if override is not None:
             return override
@@ -1518,9 +1518,9 @@ class MainWindow(QMainWindow):
         if getattr(sys, "frozen", False):
             exe_dir = Path(sys.executable).resolve().parent
             candidates = [
-                exe_dir / "cockpitdecks-launcher",
-                exe_dir / "resources" / "cockpitdecks-launcher",
-                Path(getattr(sys, "_MEIPASS", exe_dir)) / "cockpitdecks-launcher",
+                exe_dir / "cockpitdecks",
+                exe_dir / "resources" / "cockpitdecks",
+                Path(getattr(sys, "_MEIPASS", exe_dir)) / "cockpitdecks",
             ]
             for candidate in candidates:
                 if candidate.exists():
@@ -1529,7 +1529,7 @@ class MainWindow(QMainWindow):
             return candidates[0]
 
         # Dev mode: run the local launcher built in cockpitdecks repo.
-        return self._repo("cockpitdecks") / "dist" / "cockpitdecks-launcher"
+        return self._repo("cockpitdecks") / "dist" / "cockpitdecks"
 
     def _command_worker_busy(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
@@ -1548,7 +1548,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setEnabled(can_start)
         wport = self._web_listen_port()
         if can_start:
-            self.btn_start.setToolTip("Start cockpitdecks-launcher using paths and env from the Config tab.")
+            self.btn_start.setToolTip("Start cockpitdecks using paths and env from the Config tab.")
         elif cmd_busy:
             self.btn_start.setToolTip("Disabled while another task is running (e.g. Preflight). Wait for it to finish.")
         elif running:
@@ -1557,7 +1557,7 @@ class MainWindow(QMainWindow):
             p = self._resolve_launcher_binary()
             self.btn_start.setToolTip(
                 f"Launcher binary not found:\n{p}\n\n"
-                f"Set “cockpitdecks-launcher path” on the Config tab, build the launcher in the cockpitdecks repo, "
+                f"Set “cockpitdecks path” on the Config tab, build the executable in the cockpitdecks repo, "
                 f"or use a desktop build that bundles it."
             )
         elif port_in_use:
@@ -1569,7 +1569,7 @@ class MainWindow(QMainWindow):
         else:
             self.btn_start.setToolTip("Start is unavailable.")
         if can_restart:
-            self.btn_restart.setToolTip("Restart cockpitdecks-launcher.")
+            self.btn_restart.setToolTip("Restart cockpitdecks.")
         elif cmd_busy:
             self.btn_restart.setToolTip("Disabled while another task is running.")
         elif not launcher_ok:
