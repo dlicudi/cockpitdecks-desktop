@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cockpitdecks-desktop"
-version = "0.2.1-beta.3"
+version = "0.2.1-beta.4"
 description = "Desktop companion app for Cockpitdecks setup, updates, diagnostics, and launch."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,6 +14,7 @@ authors = [
 dependencies = [
   "PySide6>=6.9",
   "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+  "pyyaml>=6.0",
 ]
 
 [project.scripts]
