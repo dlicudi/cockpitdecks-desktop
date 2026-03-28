@@ -135,8 +135,8 @@ class SessionInfo:
 
 
 def fetch_session_info(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 1.5) -> SessionInfo:
-    """GET /desktop-status and return structured session info."""
-    url = f"{base_url.rstrip('/')}/desktop-status"
+    """GET /api/status and return structured session info."""
+    url = f"{base_url.rstrip('/')}/api/status"
     try:
         req = Request(url, headers={"Accept": "application/json"})
         with urlopen(req, timeout=timeout) as resp:
@@ -155,7 +155,7 @@ def fetch_session_info(*, base_url: str = "http://127.0.0.1:7777", timeout: floa
         return SessionInfo(ver, name, deck_part, dcp, "")
     except HTTPError as exc:
         if exc.code == 404:
-            return SessionInfo("", "", "", "", "update Cockpitdecks: /desktop-status missing")
+            return SessionInfo("", "", "", "", "update Cockpitdecks: /api/status missing")
         return SessionInfo("", "", "", "", f"HTTP {exc.code}")
     except URLError:
         return SessionInfo("", "", "", "", "Cockpitdecks not running")
@@ -169,8 +169,8 @@ def cockpitdecks_session_status_line(*, base_url: str = "http://127.0.0.1:7777",
 
 
 def cockpitdecks_metrics_json(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 1.5) -> tuple[dict[str, Any] | None, str | None]:
-    """GET /desktop-metrics and return parsed object."""
-    url = f"{base_url.rstrip('/')}/desktop-metrics"
+    """GET /api/metrics and return parsed object."""
+    url = f"{base_url.rstrip('/')}/api/metrics"
     try:
         req = Request(url, headers={"Accept": "application/json"})
         with urlopen(req, timeout=timeout) as resp:
@@ -212,13 +212,13 @@ def cockpitdecks_metrics_status_line(*, base_url: str = "http://127.0.0.1:7777",
             parts.append(f"drefs {drefs}")
         return " | ".join(parts) if parts else "— (no metrics yet)"
     if err == "HTTP 404":
-        return "— (update Cockpitdecks: /desktop-metrics missing)"
+        return "— (update Cockpitdecks: /api/metrics missing)"
     return f"— ({err})" if err else "— (could not read metrics)"
 
 
 def reload_decks(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
-    """GET /reload-decks to trigger a full config reload. Returns (ok, message)."""
-    url = f"{base_url.rstrip('/')}/reload-decks"
+    """GET /api/reload to trigger a full config reload. Returns (ok, message)."""
+    url = f"{base_url.rstrip('/')}/api/reload"
     try:
         req = Request(url, headers={"Accept": "application/json"})
         with urlopen(req, timeout=timeout) as resp:
@@ -230,7 +230,37 @@ def reload_decks(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.
         return True, f"Reload responded: {status or raw[:120]}"
     except HTTPError as exc:
         if exc.code == 404:
-            return False, "Cockpitdecks too old: /reload-decks endpoint missing"
+            return False, "Cockpitdecks too old: /api/reload endpoint missing"
+        return False, f"HTTP {exc.code}"
+    except URLError:
+        return False, "Cockpitdecks not running"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return False, str(exc)
+
+
+def set_target(target: str, *, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
+    """POST /api/target to switch aircraft. Returns (ok, message)."""
+    url = f"{base_url.rstrip('/')}/api/target"
+    body = json.dumps({"target": target}).encode("utf-8")
+    try:
+        req = Request(url, data=body, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        status = data.get("status", "") if isinstance(data, dict) else ""
+        message = data.get("message", "") if isinstance(data, dict) else ""
+        if status in ("ok", "saved"):
+            return True, message or f"Target set to {target}"
+        return False, message or f"Unexpected response: {raw[:120]}"
+    except HTTPError as exc:
+        if exc.code == 400:
+            try:
+                err = json.loads(exc.read().decode("utf-8"))
+                return False, err.get("message", f"HTTP 400")
+            except Exception:
+                return False, "Invalid target path"
+        if exc.code == 404:
+            return False, "Cockpitdecks too old: /api/target endpoint missing"
         return False, f"HTTP {exc.code}"
     except URLError:
         return False, "Cockpitdecks not running"

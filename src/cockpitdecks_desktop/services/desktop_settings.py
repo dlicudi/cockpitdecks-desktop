@@ -29,6 +29,8 @@ DEFAULTS: dict[str, str] = {
     "COCKPITDECKS_LAUNCHER_PATH": "",
     # Desktop app only: optional file to append launcher/Cockpitdecks stdout/stderr.
     "COCKPITDECKS_LAUNCH_LOG_PATH": "",
+    # Engine mode log level sent to cockpitdecks (DEBUG, INFO, WARNING, ERROR).
+    "COCKPITDECKS_LOG_LEVEL": "INFO",
 }
 
 
@@ -79,6 +81,12 @@ def launch_env_overlay(values: dict[str, str] | None = None) -> dict[str, str]:
         s = (v.get(key) or "").strip()
         if s:
             out[key] = s
+    # Always set engine mode when launched by the desktop app.
+    out["COCKPITDECKS_ENGINE"] = "1"
+    # Log level for cockpitdecks stdout (default INFO).
+    log_level = (v.get("COCKPITDECKS_LOG_LEVEL") or "INFO").strip().upper()
+    if log_level:
+        out["COCKPITDECKS_LOG_LEVEL"] = log_level
     return out
 
 

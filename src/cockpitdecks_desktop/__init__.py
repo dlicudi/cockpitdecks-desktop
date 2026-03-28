@@ -1,3 +1,3 @@
 """cockpitdecks-desktop package."""
 
-__version__ = "0.2.2-beta.1"
+__version__ = "0.2.2-beta.2"

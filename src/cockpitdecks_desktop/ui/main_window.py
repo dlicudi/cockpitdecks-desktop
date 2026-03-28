@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -53,12 +54,15 @@ from cockpitdecks_desktop.services.live_apis import (
     cockpitdecks_web_status_line,
     fetch_session_info,
     reload_decks as api_reload_decks,
+    set_target as api_set_target,
     SessionInfo,
     xplane_capabilities_status_line,
 )
 from cockpitdecks_desktop.services.process_runner import stream_shell_command
 from cockpitdecks_desktop.ui.app_style import MAIN_WINDOW_QSS
+from cockpitdecks_desktop.ui.deck_packs_tab import DeckPacksTab
 from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
+from cockpitdecks_desktop.ui.releases_tab import ReleasesTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 
 
@@ -609,8 +613,10 @@ class MainWindow(QMainWindow):
         self.btn_copy_logs.setToolTip("Copy selected text to clipboard (or all if nothing selected)")
         self._log_level_combo = QComboBox()
         self._log_level_combo.addItems(["All", "DEBUG", "INFO", "WARNING", "ERROR"])
-        self._log_level_combo.setCurrentText("WARNING")
-        self._log_level_combo.setToolTip("Minimum log level to display (desktop messages always shown)")
+        saved_level = load_desktop_settings().get("COCKPITDECKS_LOG_LEVEL", "INFO").upper()
+        self._log_level_combo.setCurrentText(saved_level if saved_level in ("DEBUG", "INFO", "WARNING", "ERROR") else "INFO")
+        self._log_level_combo.setToolTip("Log level sent to cockpitdecks on next start (also filters display)")
+        self._log_level_combo.currentTextChanged.connect(self._on_log_level_changed)
         logs_bar.addWidget(self.btn_clear_logs)
         logs_bar.addWidget(self.btn_copy_logs)
         logs_bar.addWidget(QLabel("Log level:"))
@@ -676,12 +682,22 @@ class MainWindow(QMainWindow):
         # ════════════════════════════════════════
         #  TAB WIDGET + ROOT ASSEMBLY
         # ════════════════════════════════════════
+        self.releases_tab = ReleasesTab()
+        self.releases_tab.installed.connect(self._on_release_installed)
+        self.releases_tab.log_line.connect(self._append)
+
+        self.deck_packs_tab = DeckPacksTab()
+        self.deck_packs_tab.installed.connect(self._on_pack_installed)
+        self.deck_packs_tab.log_line.connect(self._append)
+
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(tab_diag, "Diagnostics")
         self.tabs.addTab(tab_decks, "Decks")
+        self.tabs.addTab(self.deck_packs_tab, "Deck Packs")
         self.tabs.addTab(tab_logs, "Logs")
+        self.tabs.addTab(self.releases_tab, "Releases")
 
         root.addWidget(header)
         root.addWidget(action_bar)
@@ -744,7 +760,7 @@ class MainWindow(QMainWindow):
         "SPAM": "#6b7280",
     }
     _LOG_TAG_RE = re.compile(r"^\[([a-z]+)\]")
-    _LOG_LEVEL_RE = re.compile(r"^\[\S+\]\s+(CRITICAL|ERROR|WARNING|INFO|DEBUG|DEPRECATION|SPAM)\b")
+    _LOG_LEVEL_RE = re.compile(r"^\[.+?\]\s+(CRITICAL|ERROR|WARNING|INFO|DEBUG|DEPRECATION|SPAM)\b")
 
     # Lines matching any of these patterns are always suppressed (noise).
     _LOG_NOISE_RE = re.compile(
@@ -770,6 +786,13 @@ class MainWindow(QMainWindow):
         "\u221e": "inf",
         "\u00a9": "(c)",
     })
+
+    def _on_log_level_changed(self, level: str) -> None:
+        if level == "All":
+            return
+        settings = load_desktop_settings()
+        settings["COCKPITDECKS_LOG_LEVEL"] = level
+        save_desktop_settings(settings)
 
     def _append(self, text: str) -> None:
         if not text:
@@ -891,7 +914,7 @@ class MainWindow(QMainWindow):
             cursor = doc.find(query, cursor)
             if cursor.isNull():
                 break
-            sel = QPlainTextEdit.ExtraSelection()
+            sel = QTextEdit.ExtraSelection()
             sel.cursor = QTextCursor(cursor)
             sel.format = fmt
             selections.append(sel)
@@ -1486,7 +1509,14 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self._select_launch_target(path)
-        self._append(f"[ok] selected launch target: {path}")
+        self._append(f"[decks] selected launch target: {path}")
+        if self._launcher_is_running():
+            base = f"http://127.0.0.1:{self._web_listen_port()}"
+            ok, msg = api_set_target(path, base_url=base)
+            if ok:
+                self._append(f"[decks] {msg}")
+            else:
+                self._append(f"[decks] could not switch live: {msg}")
 
     def _use_auto_launch_target(self) -> None:
         self._select_launch_target("")
@@ -1509,12 +1539,18 @@ class MainWindow(QMainWindow):
             self._append(f"[error] could not reveal target folder {target}: {exc}")
 
     def _resolve_launcher_binary(self) -> Path:
-        """Resolve cockpitdecks executable: Config override, else bundled (frozen), else dev dist."""
+        """Resolve cockpitdecks executable: Config override → managed install → bundled (frozen) → dev dist."""
         override = launcher_binary_path(load_desktop_settings())
         if override is not None:
             return override
 
-        # Frozen desktop app: prefer bundled sidecar launcher.
+        # Managed install: downloaded via the Releases tab.
+        from cockpitdecks_desktop.services.github_releases import installed_binary
+        managed = installed_binary()
+        if managed.exists():
+            return managed
+
+        # Frozen desktop app: bundled sidecar fallback.
         if getattr(sys, "frozen", False):
             exe_dir = Path(sys.executable).resolve().parent
             candidates = [
@@ -1525,11 +1561,20 @@ class MainWindow(QMainWindow):
             for candidate in candidates:
                 if candidate.exists():
                     return candidate
-            # Return first candidate for clearer error messages if not found.
-            return candidates[0]
+            return managed  # not found — return managed path for a clear "Missing" error message
 
         # Dev mode: run the local launcher built in cockpitdecks repo.
         return self._repo("cockpitdecks") / "dist" / "cockpitdecks"
+
+    def _on_release_installed(self, tag: str) -> None:
+        """Called after a successful install from the Releases tab."""
+        self._append(f"[releases] cockpitdecks {tag} installed — ready to start")
+        self._refresh_start_stop_buttons()
+
+    def _on_pack_installed(self, tag: str) -> None:
+        """Called after a deck pack is installed from the Deck Packs tab."""
+        self._append(f"[packs] deck pack {tag} installed")
+        self._refresh_launch_targets()
 
     def _command_worker_busy(self) -> bool:
         return self._thread is not None and self._thread.isRunning()

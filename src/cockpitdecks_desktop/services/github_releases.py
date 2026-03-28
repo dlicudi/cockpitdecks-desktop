@@ -1,0 +1,134 @@
+"""GitHub releases service — fetch, download, and install the cockpitdecks binary."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path
+from typing import Callable
+
+GITHUB_REPO = "dlicudi/cockpitdecks"
+ASSET_PLATFORM = "macos-arm64"
+INSTALL_DIR = Path.home() / ".cockpitdecks" / "bin"
+BINARY_NAME = "cockpitdecks"
+VERSION_FILE = INSTALL_DIR / "version"
+
+_API_BASE = "https://api.github.com"
+_API_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
+
+def fetch_releases(repo: str = GITHUB_REPO) -> list[dict]:
+    """Fetch all releases from the GitHub API."""
+    url = f"{_API_BASE}/repos/{repo}/releases"
+    req = urllib.request.Request(url, headers=_API_HEADERS)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read())
+
+
+def installed_version() -> str | None:
+    """Return the installed version tag, or None if not installed."""
+    if VERSION_FILE.exists():
+        return VERSION_FILE.read_text().strip() or None
+    return None
+
+
+def installed_binary() -> Path:
+    return INSTALL_DIR / BINARY_NAME
+
+
+def has_binary_asset(release: dict) -> bool:
+    return _find_asset(release, ".tar.gz") is not None
+
+
+def _find_asset(release: dict, suffix: str) -> dict | None:
+    tag = release["tag_name"]
+    name = f"cockpitdecks-{ASSET_PLATFORM}-{tag}{suffix}"
+    for asset in release.get("assets", []):
+        if asset["name"] == name:
+            return asset
+    return None
+
+
+def download_and_install(
+    release: dict,
+    on_progress: Callable[[int, int], None] | None = None,
+    on_log: Callable[[str], None] | None = None,
+) -> None:
+    """Download, verify SHA-256, extract, and install the cockpitdecks binary.
+
+    Raises RuntimeError on any failure.
+    Calls on_progress(bytes_done, total_bytes) and on_log(message) throughout.
+    """
+    tag = release["tag_name"]
+    log = on_log or (lambda msg: None)
+
+    tarball_asset = _find_asset(release, ".tar.gz")
+    sha256_asset = _find_asset(release, ".tar.gz.sha256")
+
+    if not tarball_asset:
+        raise RuntimeError(f"No {ASSET_PLATFORM} asset found for {tag}")
+
+    log(f"[releases] downloading {tarball_asset['name']} ({tarball_asset['size']:,} bytes)")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        tarball_path = tmp / tarball_asset["name"]
+
+        # Download tarball with progress
+        req = urllib.request.Request(tarball_asset["browser_download_url"])
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            done = 0
+            with open(tarball_path, "wb") as fh:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if on_progress:
+                        on_progress(done, total)
+
+        log(f"[releases] download complete ({done:,} bytes)")
+
+        # Verify SHA-256
+        if sha256_asset:
+            log("[releases] verifying SHA-256 checksum")
+            sha256_path = tmp / sha256_asset["name"]
+            req = urllib.request.Request(sha256_asset["browser_download_url"])
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                sha256_path.write_bytes(resp.read())
+            expected = sha256_path.read_text().split()[0]
+            actual = hashlib.sha256(tarball_path.read_bytes()).hexdigest()
+            if actual != expected:
+                raise RuntimeError(f"SHA-256 mismatch: expected {expected}, got {actual}")
+            log("[releases] checksum OK")
+        else:
+            log("[releases] warning: no SHA-256 asset found, skipping verification")
+
+        # Extract binary from tarball
+        log("[releases] extracting binary")
+        with tarfile.open(tarball_path) as tf:
+            binary_member = next(
+                (m for m in tf.getmembers() if m.name.endswith(f"/{BINARY_NAME}") or m.name == BINARY_NAME),
+                None,
+            )
+            if not binary_member:
+                raise RuntimeError(f"'{BINARY_NAME}' not found in tarball")
+            extracted = tf.extractfile(binary_member)
+            if not extracted:
+                raise RuntimeError("Failed to extract binary from tarball")
+
+            INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+            binary_path = INSTALL_DIR / BINARY_NAME
+            binary_path.write_bytes(extracted.read())
+            binary_path.chmod(0o755)
+
+        VERSION_FILE.write_text(tag + "\n")
+        log(f"[releases] installed {tag} → {INSTALL_DIR / BINARY_NAME}")
