@@ -31,6 +31,20 @@ _BTN_SS = (
     "QPushButton:disabled { color: #a1a6b0; background: #f4f5f7; border-color: #dde0e6; }"
 )
 
+_CHANGELOG_RE = re.compile(
+    r"^\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", re.IGNORECASE
+)
+
+
+def _has_meaningful_notes(body: str) -> bool:
+    """Return True if the release body has more than just a changelog URL."""
+    stripped = body.strip()
+    if not stripped:
+        return False
+    if _CHANGELOG_RE.match(stripped):
+        return False
+    return True
+
 
 def _pack_sort_key(release: dict) -> tuple:
     """Sort packs alphabetically by name, then newest version first."""
@@ -213,7 +227,7 @@ class _PackCard(QFrame):
         border = "#bbf7d0" if self._is_installed else "#e2e8f0"
         self.setObjectName("packcard")
         self.setStyleSheet(f"QFrame#packcard {{ background: {bg}; border: 2px solid {border}; border-radius: 8px; }}")
-        self.setFixedHeight(130)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         cl = QVBoxLayout(self)
         cl.setContentsMargins(12, 10, 12, 10)
@@ -334,6 +348,39 @@ class _PackCard(QFrame):
         bottom.addWidget(self._error_label)
 
         cl.addLayout(bottom)
+
+        # ── Release notes (collapsed, only if meaningful) ───────
+        body = release.get("body", "").strip()
+        self._has_notes = _has_meaningful_notes(body)
+        if self._has_notes:
+            self._notes_visible = False
+            self._notes_toggle = QPushButton("▶ Release notes")
+            self._notes_toggle.setStyleSheet(
+                "QPushButton { background: transparent; border: none; color: #6b7280; "
+                "font-size: 10px; text-align: left; padding: 2px 0 0 0; min-height: 0; }"
+                "QPushButton:hover { color: #374151; }"
+            )
+            self._notes_toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self._notes_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._notes_toggle.clicked.connect(self._toggle_notes)
+
+            display_body = re.sub(
+                r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE
+            ).strip()
+            self._notes_label = QLabel(display_body[:2000])
+            self._notes_label.setWordWrap(True)
+            self._notes_label.setStyleSheet(
+                "color: #6b7280; font-size: 10px; padding: 2px 0 0 10px; border: none; background: transparent;"
+            )
+            self._notes_label.hide()
+
+            cl.addWidget(self._notes_toggle)
+            cl.addWidget(self._notes_label)
+
+    def _toggle_notes(self) -> None:
+        self._notes_visible = not self._notes_visible
+        self._notes_label.setVisible(self._notes_visible)
+        self._notes_toggle.setText("▼ Release notes" if self._notes_visible else "▶ Release notes")
 
     def _on_install(self) -> None:
         self._btn.setEnabled(False)
