@@ -268,6 +268,15 @@ class MainWindow(QMainWindow):
         ab_sep.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
         ab_layout.addWidget(ab_sep)
         ab_layout.addWidget(self.btn_check)
+        ab_sep2 = QFrame()
+        ab_sep2.setFrameShape(QFrame.Shape.VLine)
+        ab_sep2.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
+        ab_layout.addWidget(ab_sep2)
+        self.btn_export = QPushButton("Export Diagnostics…")
+        self.btn_export.setToolTip("Save a diagnostics bundle to a JSON file.")
+        self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export.clicked.connect(self.export_diagnostics_bundle)
+        ab_layout.addWidget(self.btn_export)
 
         ab_layout.addStretch(1)
 
@@ -761,7 +770,6 @@ class MainWindow(QMainWindow):
 
         # ── Connections ──
         self.btn_check.clicked.connect(self.run_preflight)
-        self.diag_tab.export_requested.connect(self.export_diagnostics_bundle)
 
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)

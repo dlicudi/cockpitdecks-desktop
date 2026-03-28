@@ -6,7 +6,7 @@ and inline explanations for every metric section.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -458,8 +458,6 @@ def _detail_row(key: str) -> tuple[QWidget, QLabel]:
 class DiagnosticsTab(QWidget):
     """Complete visual diagnostics tab."""
 
-    export_requested = Signal()
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
@@ -613,17 +611,6 @@ class DiagnosticsTab(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
-
-        # ── Toolbar ──────────────────────────────────────────────────
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(16, 8, 16, 12)
-        btn_export = QPushButton("Export Diagnostics…")
-        btn_export.setToolTip("Save a diagnostics bundle to a JSON file.")
-        btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_export.clicked.connect(self.export_requested)
-        toolbar.addWidget(btn_export)
-        toolbar.addStretch(1)
-        outer.addLayout(toolbar)
 
     # ── Public API ────────────────────────────────────────────────
 
