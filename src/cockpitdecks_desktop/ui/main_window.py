@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QTextEdit,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -65,6 +64,7 @@ from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
 from cockpitdecks_desktop.ui.topology_tab import TopologyTab
 from cockpitdecks_desktop.ui.releases_tab import ReleasesTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
+from cockpitdecks_desktop.ui.sparkline import SparklineWidget
 
 
 def _path_key(p: str) -> str:
@@ -395,29 +395,25 @@ class MainWindow(QMainWindow):
         metrics_layout.setSpacing(8)
         metrics_layout.addWidget(_section_heading("Runtime Metrics"))
 
-        _bar_height = "QProgressBar { max-height: 8px; border-radius: 4px; background: #e5e7eb; border: none; }"
+        _lbl_qss = "font-size: 12px; font-weight: 600; color: #374151; border: none;"
 
-        self.metric_cpu_label = QLabel("CPU —")
-        self.metric_cpu_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151; border: none;")
-        self.metric_cpu_bar = QProgressBar()
-        self.metric_cpu_bar.setRange(0, 100)
-        self.metric_cpu_bar.setValue(0)
-        self.metric_cpu_bar.setTextVisible(False)
-        self.metric_cpu_bar.setStyleSheet(_bar_height)
+        self.metric_cpu_label = QLabel("CPU (process) —")
+        self.metric_cpu_label.setStyleSheet(_lbl_qss)
+        self.metric_cpu_spark = SparklineWidget(
+            max_points=60, fixed_max=100.0, color=QColor("#22c55e"),
+        )
 
-        self.metric_mem_label = QLabel("Memory —")
-        self.metric_mem_label.setStyleSheet("font-size: 12px; font-weight: 600; color: #374151; border: none;")
-        self.metric_mem_bar = QProgressBar()
-        self.metric_mem_bar.setRange(0, 100)
-        self.metric_mem_bar.setValue(0)
-        self.metric_mem_bar.setTextVisible(False)
-        self.metric_mem_bar.setStyleSheet(_bar_height)
+        self.metric_mem_label = QLabel("Memory (RSS) —")
+        self.metric_mem_label.setStyleSheet(_lbl_qss)
+        self.metric_mem_spark = SparklineWidget(
+            max_points=60, color=QColor("#3b82f6"),
+        )
 
         metrics_layout.addWidget(self.metric_cpu_label)
-        metrics_layout.addWidget(self.metric_cpu_bar)
+        metrics_layout.addWidget(self.metric_cpu_spark)
         metrics_layout.addSpacing(2)
         metrics_layout.addWidget(self.metric_mem_label)
-        metrics_layout.addWidget(self.metric_mem_bar)
+        metrics_layout.addWidget(self.metric_mem_spark)
 
         # Metric counters in a 2x2 grid
         metrics_sep = QFrame()
@@ -2154,12 +2150,11 @@ class MainWindow(QMainWindow):
         self._append(f"[ok] diagnostics exported to {out}")
 
     def _apply_metrics_visuals(self, metrics: dict | None) -> None:
-        _bar_base = "QProgressBar {{ max-height: 8px; border-radius: 4px; background: #e5e7eb; border: none; }} QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}"
         if not isinstance(metrics, dict):
-            self.metric_cpu_label.setText("CPU —")
-            self.metric_mem_label.setText("Memory —")
-            self.metric_cpu_bar.setValue(0)
-            self.metric_mem_bar.setValue(0)
+            self.metric_cpu_label.setText("CPU (process) —")
+            self.metric_mem_label.setText("Memory (RSS) —")
+            self.metric_cpu_spark.clear()
+            self.metric_mem_spark.clear()
             self.metric_threads.setText("—")
             self.metric_variables.setText("—")
             self.metric_datarefs.setText("—")
@@ -2192,24 +2187,23 @@ class MainWindow(QMainWindow):
         drefs = s.get("datarefs_monitored")
         uptime_s = metrics.get("uptime_s")
 
-        cpu_val = int(max(0.0, min(100.0, float(cpu)))) if isinstance(cpu, (int, float)) else 0
-        self.metric_cpu_bar.setValue(cpu_val)
-        self.metric_cpu_label.setText(f"CPU {float(cpu):.1f}%" if isinstance(cpu, (int, float)) else "CPU —")
-        if cpu_val >= 85:
-            self.metric_cpu_bar.setStyleSheet(_bar_base.format(color="#ef4444"))
-        elif cpu_val >= 60:
-            self.metric_cpu_bar.setStyleSheet(_bar_base.format(color="#f59e0b"))
+        if isinstance(cpu, (int, float)):
+            cpu_f = float(cpu)
+            self.metric_cpu_label.setText(f"CPU (process) {cpu_f:.1f}%")
+            cpu_color = (
+                QColor("#ef4444") if cpu_f >= 85 else
+                QColor("#f59e0b") if cpu_f >= 60 else
+                QColor("#22c55e")
+            )
+            self.metric_cpu_spark.push(cpu_f, cpu_color)
         else:
-            self.metric_cpu_bar.setStyleSheet(_bar_base.format(color="#22c55e"))
+            self.metric_cpu_label.setText("CPU (process) —")
 
         if isinstance(rss_mb, (int, float)):
-            mem_pct = int(max(0.0, min(100.0, (float(rss_mb) / 4096.0) * 100.0)))
-            self.metric_mem_bar.setValue(mem_pct)
-            self.metric_mem_label.setText(f"Memory {float(rss_mb):.1f} MB")
+            self.metric_mem_label.setText(f"Memory (RSS) {float(rss_mb):.1f} MB")
+            self.metric_mem_spark.push(float(rss_mb))
         else:
-            self.metric_mem_bar.setValue(0)
-            self.metric_mem_label.setText("Memory —")
-        self.metric_mem_bar.setStyleSheet(_bar_base.format(color="#3b82f6"))
+            self.metric_mem_label.setText("Memory (RSS) —")
 
         self.metric_threads.setText(str(threads) if isinstance(threads, int) else "—")
         self.metric_variables.setText(str(vars_n) if isinstance(vars_n, int) else "—")
