@@ -439,6 +439,14 @@ class MainWindow(QMainWindow):
         self._prev_rate_poll_ts: float | None = None
         self._last_session_info: SessionInfo | None = None
         self._last_metrics_obj: dict | None = None
+
+        # Log-analysis state (populated by _parse_log_line)
+        self._log_init_start_ts: float | None = None
+        self._log_init_end_ts: float | None = None
+        self._log_extensions: list[str] = []
+        self._log_missing_ext: list[str] = []
+        self._log_hardware: dict[str, int] = {}
+        self._log_last_usb: str = ""
         _counter_val_qss = "font-size: 20px; font-weight: 700; color: #1e293b; border: none;"
         _counter_lbl_qss = "font-size: 11px; color: #6b7280; border: none;"
         for cv in (self.metric_threads, self.metric_variables, self.metric_datarefs,
@@ -815,6 +823,16 @@ class MainWindow(QMainWindow):
     _LOG_TAG_RE = re.compile(r"^\[([a-z]+)\]")
     _LOG_LEVEL_RE = re.compile(r"^\[.+?\]\s+(CRITICAL|ERROR|WARNING|INFO|DEBUG|DEPRECATION|SPAM)\b")
 
+    # Log-analysis patterns (matched against raw launcher stdout lines)
+    _LOG_TS_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\]")
+    _LOG_INIT_START_RE = re.compile(r"Initializing Cockpitdecks\.\.")
+    _LOG_INIT_END_RE = re.compile(r"\.\.initialized")
+    _LOG_EXTENSIONS_RE = re.compile(r"loaded extensions (.+)")
+    _LOG_MISSING_EXT_RE = re.compile(r"package (\S+) not found")
+    _LOG_HW_FOUND_RE = re.compile(r"found (\d+) (\w+)")
+    _LOG_USB_CONNECT_RE = re.compile(r"new usb device (.+?) \(serial")
+    _LOG_USB_DISCONNECT_RE = re.compile(r"usb device (.+?) was removed")
+
     # Lines matching any of these patterns are always suppressed (noise).
     _LOG_NOISE_RE = re.compile(
         r'"(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) /\S* HTTP/\d\.\d"'  # Flask request logs
@@ -847,9 +865,71 @@ class MainWindow(QMainWindow):
         settings["COCKPITDECKS_LOG_LEVEL"] = level
         save_desktop_settings(settings)
 
+    def _parse_log_line(self, text: str) -> None:
+        """Extract diagnostic events from raw launcher log lines and update the diagnostics tab."""
+        from datetime import datetime as _dt
+
+        def _ts(line: str) -> float | None:
+            m = self._LOG_TS_RE.match(line)
+            if m:
+                try:
+                    return _dt.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+                except ValueError:
+                    pass
+            return None
+
+        dirty = False
+
+        if self._LOG_INIT_START_RE.search(text):
+            self._log_init_start_ts = _ts(text)
+            self._log_init_end_ts = None
+            self._log_extensions = []
+            self._log_missing_ext = []
+            self._log_hardware = {}
+            self._log_last_usb = ""
+            dirty = True
+
+        elif self._LOG_INIT_END_RE.search(text):
+            self._log_init_end_ts = _ts(text)
+            dirty = True
+
+        elif m := self._LOG_EXTENSIONS_RE.search(text):
+            self._log_extensions = [e.strip() for e in m.group(1).split(",")]
+            dirty = True
+
+        elif m := self._LOG_MISSING_EXT_RE.search(text):
+            pkg = m.group(1)
+            if pkg not in self._log_missing_ext:
+                self._log_missing_ext.append(pkg)
+            dirty = True
+
+        elif m := self._LOG_HW_FOUND_RE.search(text):
+            count, kind = int(m.group(1)), m.group(2).lower()
+            self._log_hardware[kind] = count
+            dirty = True
+
+        elif m := self._LOG_USB_CONNECT_RE.search(text):
+            self._log_last_usb = f"\u2191 {m.group(1).strip()}"
+            dirty = True
+
+        elif m := self._LOG_USB_DISCONNECT_RE.search(text):
+            self._log_last_usb = f"\u2193 {m.group(1).strip()}"
+            dirty = True
+
+        if dirty and hasattr(self, "diag_tab"):
+            init_s: float | None = None
+            if self._log_init_start_ts is not None and self._log_init_end_ts is not None:
+                init_s = self._log_init_end_ts - self._log_init_start_ts
+            self.diag_tab.update_log_analysis(
+                init_s, self._log_extensions, self._log_missing_ext,
+                self._log_hardware, self._log_last_usb,
+            )
+
     def _append(self, text: str) -> None:
         if not text:
             return
+
+        self._parse_log_line(text)
 
         # Always suppress noise lines.
         if self._LOG_NOISE_RE.search(text):
@@ -2299,6 +2379,14 @@ class MainWindow(QMainWindow):
         self._append(f"[{tag}] {msg}")
 
     def start_cockpitdecks(self) -> None:
+        # Reset log-analysis state for the new launch
+        self._log_init_start_ts = None
+        self._log_init_end_ts = None
+        self._log_extensions = []
+        self._log_missing_ext = []
+        self._log_hardware = {}
+        self._log_last_usb = ""
+
         launcher = self._resolve_launcher_binary()
         if not launcher.exists():
             self._append(f"[launch] launcher not found: {launcher}")

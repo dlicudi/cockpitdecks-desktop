@@ -591,11 +591,16 @@ class DiagnosticsTab(QWidget):
         row_log, self._detail_log = _detail_row("Log")
         row_crash, self._detail_crash = _detail_row("Crash")
         row_exit, self._detail_exit = _detail_row("Exit")
-        for r in (row_launcher, row_target, row_log, row_crash, row_exit):
+        row_init, self._detail_init = _detail_row("Init time")
+        row_extensions, self._detail_extensions = _detail_row("Extensions")
+        row_hardware, self._detail_hardware = _detail_row("Hardware")
+        for r in (row_launcher, row_target, row_log, row_crash, row_exit,
+                  row_init, row_extensions, row_hardware):
             sc.addWidget(r)
 
         sc.addWidget(_hint(
             "Launcher binary path and state. Target = aircraft config directory. "
+            "Init time = seconds from launch to ready. "
             "Exit 0 = normal, non-zero = error."
         ))
         bottom_row.addWidget(startup_card, 1)
@@ -741,6 +746,34 @@ class DiagnosticsTab(QWidget):
         self._thread_total.setText(f"{len(threads)} types, {total} total")
         self._status_threads.setText(f"{total} active threads")
 
+    def update_log_analysis(self, init_s: float | None, extensions: list[str],
+                            missing: list[str], hardware: dict[str, int],
+                            last_usb: str) -> None:
+        """Update startup card rows derived from parsing launcher log output."""
+        if init_s is not None:
+            self._detail_init.setText(f"{init_s:.1f} s")
+        else:
+            self._detail_init.setText("\u2014")
+
+        if extensions:
+            ext_text = ", ".join(extensions)
+            if missing:
+                ext_text += f"  \u26a0\ufe0f missing: {', '.join(missing)}"
+            self._detail_extensions.setText(ext_text)
+        elif missing:
+            self._detail_extensions.setText(f"\u26a0\ufe0f missing: {', '.join(missing)}")
+        else:
+            self._detail_extensions.setText("\u2014")
+
+        if hardware:
+            parts = [f"{count} {name}" for name, count in sorted(hardware.items())]
+            hw_text = ", ".join(parts)
+            if last_usb:
+                hw_text += f"  \u00b7  {last_usb}"
+            self._detail_hardware.setText(hw_text)
+        else:
+            self._detail_hardware.setText(last_usb or "\u2014")
+
     def update_startup(self, launcher: str, target: str, log: str, crash: str, exit_code: str) -> None:
         self._detail_launcher.setText(launcher)
         self._detail_target.setText(target)
@@ -768,6 +801,7 @@ class DiagnosticsTab(QWidget):
             r.clear()
         self.update_threads({})
         self.update_startup("\u2014", "\u2014", "\u2014", "\u2014", "\u2014")
+        self.update_log_analysis(None, [], [], {}, "")
         for sb in (self._status_connectivity, self._status_latency, self._status_pressure,
                    self._status_threads, self._status_startup):
             sb.setText("")
