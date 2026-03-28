@@ -281,21 +281,6 @@ class MainWindow(QMainWindow):
         ab_layout.addStretch(1)
 
         # ════════════════════════════════════════
-        #  LAST ACTION FEEDBACK
-        # ════════════════════════════════════════
-        self.status_feedback = QLabel("Ready")
-        self.status_feedback.setWordWrap(False)
-        self.status_feedback.setTextFormat(Qt.PlainText)
-        self.status_feedback.setStyleSheet(
-            "background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; "
-            "padding: 6px 12px; color: #166534; font-size: 12px;"
-        )
-        self.status_feedback.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        sp = self.status_feedback.sizePolicy()
-        sp.setHorizontalPolicy(sp.Policy.Ignored)
-        self.status_feedback.setSizePolicy(sp)
-
-        # ════════════════════════════════════════
         #  CONNECTIVITY CARD (left)
         # ════════════════════════════════════════
         conn_card = _card()
@@ -505,8 +490,6 @@ class MainWindow(QMainWindow):
         si = QVBoxLayout(status_inner)
         si.setContentsMargins(20, 16, 20, 20)
         si.setSpacing(12)
-        si.addWidget(self.status_feedback)
-
         cards_row = QHBoxLayout()
         cards_row.setSpacing(12)
         cards_row.addWidget(conn_card, 3)
@@ -1109,26 +1092,9 @@ class MainWindow(QMainWindow):
         msg = (text or "").strip()
         if not msg:
             return
-        # Keep status page concise; clip very long lines from verbose logs.
-        if len(msg) > 220:
-            msg = msg[:217] + "..."
-        self.status_feedback.setText(msg)
-        low = msg.lower()
-        if any(k in low for k in ("error", "fail", "missing", "blocked", "kill")):
-            self.status_feedback.setStyleSheet(
-                "background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; "
-                "padding: 6px 12px; color: #991b1b; font-size: 12px;"
-            )
-        elif any(k in low for k in ("started", "complete", "ok", "saved", "ready")):
-            self.status_feedback.setStyleSheet(
-                "background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; "
-                "padding: 6px 12px; color: #166534; font-size: 12px;"
-            )
-        else:
-            self.status_feedback.setStyleSheet(
-                "background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; "
-                "padding: 6px 12px; color: #334155; font-size: 12px;"
-            )
+        if len(msg) > 160:
+            msg = msg[:157] + "..."
+        self.statusBar().showMessage(msg)
 
     def _workspace(self) -> Path:
         return Path.home() / "GitHub"
