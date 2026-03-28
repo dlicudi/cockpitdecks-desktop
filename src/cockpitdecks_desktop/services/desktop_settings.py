@@ -25,8 +25,12 @@ DEFAULTS: dict[str, str] = {
     "API_PORT": "8086",
     "COCKPIT_WEB_HOST": "127.0.0.1",
     "COCKPIT_WEB_PORT": "7777",
-    # Desktop app only: optional path to cockpitdecks (empty = bundled or dev default).
+    # Desktop app only: optional path to release cockpitdecks binary (empty = bundled or managed install).
     "COCKPITDECKS_LAUNCHER_PATH": "",
+    # Desktop app only: optional path to dev cockpitdecks script (e.g. ~/GitHub/cockpitdecks/scripts/cockpitdecks.sh).
+    "COCKPITDECKS_LAUNCHER_PATH_DEV": "",
+    # Desktop app only: active launcher mode — "release" or "dev".
+    "COCKPITDECKS_LAUNCHER_MODE": "release",
     # Desktop app only: optional file to append launcher/Cockpitdecks stdout/stderr.
     "COCKPITDECKS_LAUNCH_LOG_PATH": "",
     # Engine mode log level sent to cockpitdecks (DEBUG, INFO, WARNING, ERROR).
@@ -105,9 +109,16 @@ def cockpit_web_base(values: dict[str, str] | None = None) -> str:
 
 
 def launcher_binary_path(values: dict[str, str] | None = None) -> Path | None:
-    """Explicit launcher path from settings, or None to use app defaults (bundle / dev dist)."""
+    """Active launcher path from settings, respecting the current mode (release/dev).
+
+    Returns None to signal "use app defaults" (managed install / bundled binary).
+    """
     v = values or load()
-    raw = (v.get("COCKPITDECKS_LAUNCHER_PATH") or "").strip()
+    mode = (v.get("COCKPITDECKS_LAUNCHER_MODE") or "release").strip().lower()
+    if mode == "dev":
+        raw = (v.get("COCKPITDECKS_LAUNCHER_PATH_DEV") or "").strip()
+    else:
+        raw = (v.get("COCKPITDECKS_LAUNCHER_PATH") or "").strip()
     if not raw:
         return None
     return Path(raw).expanduser()
