@@ -594,15 +594,19 @@ class DiagnosticsTab(QWidget):
         row_init, self._detail_init = _detail_row("Init time")
         row_extensions, self._detail_extensions = _detail_row("Extensions")
         row_hardware, self._detail_hardware = _detail_row("Hardware")
+        row_packages, self._detail_packages = _detail_row("Packages")
         for r in (row_launcher, row_target, row_log, row_crash, row_exit,
-                  row_init, row_extensions, row_hardware):
+                  row_init, row_extensions, row_hardware, row_packages):
             sc.addWidget(r)
 
         sc.addWidget(_hint(
             "Launcher binary path and state. Target = aircraft config directory. "
             "Init time = seconds from launch to ready. "
+            "Packages = installed cockpitdecks_* distributions and versions. "
             "Exit 0 = normal, non-zero = error."
         ))
+
+        self._populate_packages()
         bottom_row.addWidget(startup_card, 1)
 
         layout.addLayout(bottom_row)
@@ -745,6 +749,17 @@ class DiagnosticsTab(QWidget):
 
         self._thread_total.setText(f"{len(threads)} types, {total} total")
         self._status_threads.setText(f"{total} active threads")
+
+    def _populate_packages(self) -> None:
+        """Query installed cockpitdecks_* packages via importlib.metadata and fill the Packages row."""
+        import importlib.metadata
+        parts: list[str] = []
+        for dist in sorted(importlib.metadata.distributions(), key=lambda d: (d.metadata["Name"] or "").lower()):
+            name = dist.metadata["Name"] or ""
+            if name.lower().startswith("cockpitdecks"):
+                version = dist.metadata["Version"] or "?"
+                parts.append(f"{name} {version}")
+        self._detail_packages.setText(",  ".join(parts) if parts else "\u2014")
 
     def update_log_analysis(self, init_s: float | None, extensions: list[str],
                             missing: list[str], hardware: dict[str, int],
