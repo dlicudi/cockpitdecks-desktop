@@ -586,25 +586,53 @@ class DiagnosticsTab(QWidget):
         startup_card, sc, self._status_startup = _card_with_status(bg=_ALT_CARD_BG, border="#e5e7eb")
         sc.addWidget(_heading("Startup Details"))
 
+        def _group_sep() -> QFrame:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setStyleSheet(f"color: #e5e7eb; max-height: 1px; border: none; margin: 4px 0;")
+            return sep
+
+        def _group_label(text: str) -> QLabel:
+            lbl = QLabel(text)
+            lbl.setStyleSheet(f"font-size: 10px; font-weight: 700; color: {_MUTED}; border: none; "
+                              f"letter-spacing: 0.05em; text-transform: uppercase; padding-top: 2px;")
+            return lbl
+
+        # ── Group 1: Status ──
+        sc.addWidget(_group_label("Status"))
         row_launcher, self._detail_launcher = _detail_row("Launcher")
-        row_target, self._detail_target = _detail_row("Target")
-        row_log, self._detail_log = _detail_row("Log")
-        row_crash, self._detail_crash = _detail_row("Crash")
-        row_exit, self._detail_exit = _detail_row("Exit")
+        row_exit, self._detail_exit = _detail_row("Exit code")
         row_init, self._detail_init = _detail_row("Init time")
-        row_extensions, self._detail_extensions = _detail_row("Extensions")
-        row_hardware, self._detail_hardware = _detail_row("Hardware")
-        row_packages, self._detail_packages = _detail_row("Packages")
-        for r in (row_launcher, row_target, row_log, row_crash, row_exit,
-                  row_init, row_extensions, row_hardware, row_packages):
+        for r in (row_launcher, row_exit, row_init):
             sc.addWidget(r)
 
-        sc.addWidget(_hint(
-            "Launcher binary path and state. Target = aircraft config directory. "
-            "Init time = seconds from launch to ready. "
-            "Packages = installed cockpitdecks_* distributions and versions. "
-            "Exit 0 = normal, non-zero = error."
-        ))
+        # ── Group 2: Last run ──
+        sc.addWidget(_group_sep())
+        sc.addWidget(_group_label("Last run"))
+        row_extensions, self._detail_extensions = _detail_row("Extensions")
+        row_hardware, self._detail_hardware = _detail_row("Hardware")
+        for r in (row_extensions, row_hardware):
+            sc.addWidget(r)
+
+        # ── Group 3: Paths ──
+        sc.addWidget(_group_sep())
+        sc.addWidget(_group_label("Paths"))
+        row_target, self._detail_target = _detail_row("Target")
+        row_log, self._detail_log = _detail_row("Launch log")
+        row_crash, self._detail_crash = _detail_row("Crash log")
+        for r in (row_target, row_log, row_crash):
+            sc.addWidget(r)
+
+        # ── Group 4: Packages ──
+        sc.addWidget(_group_sep())
+        sc.addWidget(_group_label("Packages"))
+        self._detail_packages = QLabel("\u2014")
+        self._detail_packages.setWordWrap(True)
+        self._detail_packages.setStyleSheet(
+            f"font-size: 11px; color: {_DARK}; border: none; font-family: {_MONO}; padding: 2px 0;"
+        )
+        self._detail_packages.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        sc.addWidget(self._detail_packages)
 
         self._populate_packages()
         bottom_row.addWidget(startup_card, 1)
@@ -759,7 +787,7 @@ class DiagnosticsTab(QWidget):
             if name.lower().startswith("cockpitdecks"):
                 version = dist.metadata["Version"] or "?"
                 parts.append(f"{name} {version}")
-        self._detail_packages.setText(",  ".join(parts) if parts else "\u2014")
+        self._detail_packages.setText("   ·   ".join(parts) if parts else "\u2014")
 
     def update_log_analysis(self, init_s: float | None, extensions: list[str],
                             missing: list[str], hardware: dict[str, int],
