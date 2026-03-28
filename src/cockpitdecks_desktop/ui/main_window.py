@@ -62,6 +62,7 @@ from cockpitdecks_desktop.services.process_runner import stream_shell_command
 from cockpitdecks_desktop.ui.app_style import MAIN_WINDOW_QSS
 from cockpitdecks_desktop.ui.deck_packs_tab import DeckPacksTab
 from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
+from cockpitdecks_desktop.ui.topology_tab import TopologyTab
 from cockpitdecks_desktop.ui.releases_tab import ReleasesTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 
@@ -737,8 +738,11 @@ class MainWindow(QMainWindow):
         self.releases_tab.installed.connect(self._on_release_installed)
         self.releases_tab.log_line.connect(self._append)
 
+        self.topology_tab = TopologyTab()
+
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
+        self.tabs.addTab(self.topology_tab, "Overview")
         self.tabs.addTab(tab_decks, "Decks")
         self.tabs.addTab(self.releases_tab, "Releases")
         self.tabs.addTab(tab_config, "Config")
@@ -2017,6 +2021,24 @@ class MainWindow(QMainWindow):
             log=_shorten_filesystem_path(launch_log, max_len=96) if launch_log else "Not configured",
             crash=(_shorten_filesystem_path(crash_log, max_len=80) + (" | present" if crash_log.exists() else " | none yet")),
             exit_code=str(self._last_launcher_exit_code) if self._last_launcher_exit_code is not None else "—",
+        )
+
+        # ── Topology diagram ──
+        session = self._last_session_info
+        self.topology_tab.update_topology(
+            launcher_status=launcher_level,
+            launcher_label=launcher_health,
+            cockpit_status=cockpit_level,
+            cockpit_label=cockpit_text,
+            xplane_status=xp_level,
+            xplane_label=xp_text,
+            desktop_label=f"v{self._desktop_app_version()}",
+            cockpit_reachable=_check_ok(self.info_cockpit_web.text()),
+            xplane_reachable=_check_ok(self.info_xplane.text()),
+            launcher_running=launcher_running,
+            decks=session.decks_detail if session and session.ok else [],
+            dataref_rate=self.metric_dataref_rate.text(),
+            ws_rate=self.metric_ws_rate.text(),
         )
 
     def _build_diagnostics_bundle(self) -> dict:
