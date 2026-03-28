@@ -31,9 +31,10 @@ _BLUE  = QColor("#3b82f6")
 _DARK  = QColor("#1e293b")
 _MUTED = QColor("#64748b")
 
-_NODE_BG     = QColor("#ffffff")
-_HUB_BG      = QColor("#eff6ff")   # light blue tint for the central hub
-_CANVAS_BG   = QColor("#f1f5f9")
+_NODE_BG      = QColor("#ffffff")
+_HUB_BG       = QColor("#eff6ff")   # light blue tint for the central hub
+_COMPONENT_BG = QColor("#ecfeff")   # light cyan for embedded library nodes
+_CANVAS_BG    = QColor("#f1f5f9")
 _EDGE_NEUTRAL = QColor("#cbd5e1")
 
 
@@ -52,6 +53,7 @@ class _Node:
     detail: str = ""           # Optional third line (smaller font)
     status: str = "neutral"   # ok | warn | error | neutral
     hub: bool = False          # True → blue accent border + tinted fill
+    component: bool = False    # True → cyan tint; marks an in-process library node
     W: float = 150
     H: float = 58
     # Assigned by _layout()
@@ -89,18 +91,20 @@ class TopologyTab(QWidget):
 
     def _default_nodes(self) -> list[_Node]:
         return [
-            _Node("desktop",       "Desktop App",    status="ok",      W=150, H=58),
-            _Node("launcher",      "Launcher",                         W=150, H=58),
-            _Node("cockpitdecks",  "Cockpitdecks",   hub=True,         W=170, H=76),
-            _Node("xplane",        "X-Plane",                          W=150, H=58),
+            _Node("desktop",       "Desktop App",    status="ok",               W=150, H=58),
+            _Node("launcher",      "Launcher",                                   W=150, H=58),
+            _Node("cockpitdecks",  "Cockpitdecks",   hub=True,                  W=170, H=76),
+            _Node("xplane_webapi", "xplane-webapi",  component=True,            W=140, H=52),
+            _Node("xplane",        "X-Plane",                                    W=150, H=58),
         ]
 
     def _default_edges(self) -> list[_Edge]:
         return [
-            _Edge("desktop",      "launcher",      "spawns",   dashed=True),
-            _Edge("desktop",      "cockpitdecks",  "HTTP"),
-            _Edge("desktop",      "xplane",        "REST",     dashed=True),
-            _Edge("cockpitdecks", "xplane",        "WebSocket",        bidirectional=True),
+            _Edge("desktop",       "launcher",      "spawns",              dashed=True),
+            _Edge("desktop",       "cockpitdecks",  "HTTP"),
+            _Edge("desktop",       "xplane",        "REST",                dashed=True),
+            _Edge("cockpitdecks",  "xplane_webapi", ""),
+            _Edge("xplane_webapi", "xplane",        "WebSocket",           bidirectional=True),
         ]
 
     # ── Public update API ─────────────────────────────────────────────────
@@ -135,7 +139,17 @@ class TopologyTab(QWidget):
 
         # ── Fixed nodes ───────────────────────────────────────────────────
         node_map = {n.key: n for n in self._nodes
-                    if not n.key.startswith("deck_") and n.key != "webdecks"}
+                    if not n.key.startswith("deck_") and n.key != "webdecks" and n.key != "xplane_webapi"}
+
+        # Ensure xplane_webapi is always present as a fixed node
+        existing = {n.key: n for n in self._nodes}
+        if "xplane_webapi" in existing:
+            node_map["xplane_webapi"] = existing["xplane_webapi"]
+        else:
+            node_map["xplane_webapi"] = _Node(
+                "xplane_webapi", "xplane-webapi",
+                subtitle="WS + REST client", component=True, W=140, H=52,
+            )
 
         node_map["desktop"].subtitle = desktop_label
 
@@ -165,6 +179,10 @@ class TopologyTab(QWidget):
 
         node_map["xplane"].subtitle = xplane_label
         node_map["xplane"].status = xplane_status
+
+        # xplane-webapi: always present; status mirrors cockpitdecks reachability
+        node_map["xplane_webapi"].subtitle = "WS + REST client"
+        node_map["xplane_webapi"].status = cockpit_status
 
         # ── Deck nodes (rebuilt each time) ────────────────────────────────
         deck_nodes: list[_Node] = []
@@ -203,7 +221,7 @@ class TopologyTab(QWidget):
                 W=145, H=52,
             ))
 
-        # ── Assemble node list ────────────────────────────────────────────
+        # ── Assemble node list (xplane_webapi kept with fixed nodes) ─────────
         self._nodes = list(node_map.values()) + deck_nodes
 
         # ── Edges ─────────────────────────────────────────────────────────
@@ -216,6 +234,8 @@ class TopologyTab(QWidget):
         cockpit_addr = f"{cockpit_web_host or '127.0.0.1'}:{cockpit_web_port or '7777'}"
         xp_addr = f"{api_host or '127.0.0.1'}:{api_port or '8086'}"
 
+        ws_status = _es(cockpit_reachable if xplane_reachable else None)
+
         self._edges = [
             _Edge("desktop", "launcher", "spawns",
                   status="ok" if launcher_running else "neutral", dashed=True),
@@ -225,9 +245,11 @@ class TopologyTab(QWidget):
             _Edge("desktop", "xplane", "REST",
                   metric=xp_addr,
                   status=_es(xplane_reachable), dashed=True),
-            _Edge("cockpitdecks", "xplane", "WebSocket",
+            _Edge("cockpitdecks", "xplane_webapi", "",
+                  status=_es(cockpit_reachable)),
+            _Edge("xplane_webapi", "xplane", "WebSocket",
                   metric=xp_metric,
-                  status=_es(cockpit_reachable if xplane_reachable else None),
+                  status=ws_status,
                   bidirectional=True),
         ]
         for dn in deck_nodes:
@@ -281,13 +303,18 @@ class TopologyTab(QWidget):
 
         # Central hub
         if "cockpitdecks" in node_map:
-            node_map["cockpitdecks"].cx = W * 0.50
+            node_map["cockpitdecks"].cx = W * 0.46
             node_map["cockpitdecks"].cy = H * 0.38
 
-        # Right column: X-Plane
+        # xplane-webapi sits between cockpitdecks and X-Plane
+        if "xplane_webapi" in node_map:
+            node_map["xplane_webapi"].cx = W * 0.70
+            node_map["xplane_webapi"].cy = H * 0.30
+
+        # X-Plane in the upper-right corner
         if "xplane" in node_map:
-            node_map["xplane"].cx = W * 0.80
-            node_map["xplane"].cy = H * 0.25
+            node_map["xplane"].cx = W * 0.87
+            node_map["xplane"].cy = H * 0.20
 
         # Bottom row: Desktop App and Launcher
         if "desktop" in node_map:
@@ -323,13 +350,16 @@ class TopologyTab(QWidget):
         painter.drawRoundedRect(shadow, 10, 10)
 
         # Fill
-        fill = _HUB_BG if node.hub else _NODE_BG
+        fill = _HUB_BG if node.hub else (_COMPONENT_BG if node.component else _NODE_BG)
         painter.setBrush(QBrush(fill))
 
         # Border
         if node.hub:
             border_color = _BLUE
             border_w = 2.5
+        elif node.component:
+            border_color = QColor("#22d3ee") if node.status == "ok" else QColor("#a5f3fc")
+            border_w = 1.5
         elif node.status != "neutral":
             border_color = status_color
             border_w = 2.0
