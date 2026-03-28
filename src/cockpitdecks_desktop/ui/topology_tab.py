@@ -49,6 +49,7 @@ class _Node:
     key: str
     title: str
     subtitle: str = ""
+    detail: str = ""           # Optional third line (smaller font)
     status: str = "neutral"   # ok | warn | error | neutral
     hub: bool = False          # True → blue accent border + tinted fill
     W: float = 150
@@ -90,7 +91,7 @@ class TopologyTab(QWidget):
         return [
             _Node("desktop",       "Desktop App",    status="ok",      W=150, H=58),
             _Node("launcher",      "Launcher",                         W=150, H=58),
-            _Node("cockpitdecks",  "Cockpitdecks",   hub=True,         W=170, H=64),
+            _Node("cockpitdecks",  "Cockpitdecks",   hub=True,         W=170, H=76),
             _Node("xplane",        "X-Plane",                          W=150, H=58),
         ]
 
@@ -109,8 +110,13 @@ class TopologyTab(QWidget):
         *,
         launcher_status: str,
         launcher_label: str,
+        launcher_mode: str = "release",
+        launcher_pid: int | None = None,
         cockpit_status: str,
         cockpit_label: str,
+        cockpit_version: str = "",
+        cockpit_uptime: str = "",
+        cockpit_aircraft: str = "",
         xplane_status: str,
         xplane_label: str,
         desktop_label: str,
@@ -120,6 +126,10 @@ class TopologyTab(QWidget):
         decks: list[dict],
         dataref_rate: str = "",
         ws_rate: str = "",
+        api_host: str = "127.0.0.1",
+        api_port: str = "8086",
+        cockpit_web_host: str = "127.0.0.1",
+        cockpit_web_port: str = "7777",
     ) -> None:
         """Rebuild node/edge state from live poll data and schedule a repaint."""
 
@@ -128,12 +138,33 @@ class TopologyTab(QWidget):
                     if not n.key.startswith("deck_") and n.key != "webdecks"}
 
         node_map["desktop"].subtitle = desktop_label
-        node_map["cockpitdecks"].subtitle = cockpit_label
+
+        # Launcher: show mode and PID when running
+        launcher_sub = launcher_label
+        mode_str = "dev" if launcher_mode == "dev" else "release"
+        launcher_sub += f" · {mode_str}"
+        if launcher_running and launcher_pid is not None:
+            launcher_sub += f" · PID {launcher_pid}"
+        node_map["launcher"].subtitle = launcher_sub
+        node_map["launcher"].status = launcher_status
+
+        # Cockpitdecks hub: version + uptime on subtitle, aircraft on detail
+        if cockpit_version or (cockpit_uptime and cockpit_uptime not in ("—", "")):
+            sub_parts = []
+            if cockpit_version:
+                v = cockpit_version if cockpit_version.startswith("v") else f"v{cockpit_version}"
+                sub_parts.append(v)
+            if cockpit_uptime and cockpit_uptime not in ("—", ""):
+                sub_parts.append(cockpit_uptime)
+            node_map["cockpitdecks"].subtitle = " · ".join(sub_parts)
+            node_map["cockpitdecks"].detail = cockpit_aircraft or cockpit_label
+        else:
+            node_map["cockpitdecks"].subtitle = cockpit_label
+            node_map["cockpitdecks"].detail = ""
         node_map["cockpitdecks"].status = cockpit_status
+
         node_map["xplane"].subtitle = xplane_label
         node_map["xplane"].status = xplane_status
-        node_map["launcher"].subtitle = launcher_label
-        node_map["launcher"].status = launcher_status
 
         # ── Deck nodes (rebuilt each time) ────────────────────────────────
         deck_nodes: list[_Node] = []
@@ -182,13 +213,17 @@ class TopologyTab(QWidget):
             return "neutral"
 
         xp_metric = f"{dataref_rate} ref/s" if dataref_rate not in ("—", "", None) else ""
+        cockpit_addr = f"{cockpit_web_host or '127.0.0.1'}:{cockpit_web_port or '7777'}"
+        xp_addr = f"{api_host or '127.0.0.1'}:{api_port or '8086'}"
 
         self._edges = [
             _Edge("desktop", "launcher", "spawns",
                   status="ok" if launcher_running else "neutral", dashed=True),
             _Edge("desktop", "cockpitdecks", "HTTP",
+                  metric=cockpit_addr,
                   status=_es(cockpit_reachable)),
             _Edge("desktop", "xplane", "REST",
+                  metric=xp_addr,
                   status=_es(xplane_reachable), dashed=True),
             _Edge("cockpitdecks", "xplane", "WebSocket",
                   metric=xp_metric,
@@ -314,13 +349,18 @@ class TopologyTab(QWidget):
             dot_r, dot_r,
         )
 
-        # Title
+        # Title / subtitle / detail — layout adapts to whether detail is present
+        has_detail = bool(node.detail)
+        title_top = rect.top() + (6 if has_detail else 7)
+        sub_top   = rect.top() + (25 if has_detail else 30)
+        det_top   = rect.top() + 46
+
         tf = QFont()
         tf.setPointSize(10)
         tf.setWeight(QFont.Weight.DemiBold)
         painter.setFont(tf)
         painter.setPen(QPen(_BLUE if node.hub else _DARK))
-        title_rect = QRectF(rect.left() + 10, rect.top() + 7, rect.width() - 26, 20)
+        title_rect = QRectF(rect.left() + 10, title_top, rect.width() - 26, 20)
         painter.drawText(
             title_rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -333,7 +373,7 @@ class TopologyTab(QWidget):
             sf.setPointSize(8)
             painter.setFont(sf)
             painter.setPen(QPen(_MUTED))
-            sub_rect = QRectF(rect.left() + 10, rect.top() + 30, rect.width() - 20, 20)
+            sub_rect = QRectF(rect.left() + 10, sub_top, rect.width() - 20, 18)
             fm = QFontMetrics(sf)
             elided = fm.elidedText(
                 node.subtitle, Qt.TextElideMode.ElideRight, int(sub_rect.width())
@@ -342,6 +382,23 @@ class TopologyTab(QWidget):
                 sub_rect,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 elided,
+            )
+
+        # Detail — third line (smaller, only when present)
+        if has_detail:
+            df = QFont()
+            df.setPointSize(7)
+            painter.setFont(df)
+            painter.setPen(QPen(_MUTED))
+            det_rect = QRectF(rect.left() + 10, det_top, rect.width() - 20, 16)
+            fm2 = QFontMetrics(df)
+            elided2 = fm2.elidedText(
+                node.detail, Qt.TextElideMode.ElideRight, int(det_rect.width())
+            )
+            painter.drawText(
+                det_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                elided2,
             )
 
     # ── Edge drawing ──────────────────────────────────────────────────────

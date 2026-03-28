@@ -2086,8 +2086,13 @@ class MainWindow(QMainWindow):
         self.topology_tab.update_topology(
             launcher_status=launcher_level,
             launcher_label=launcher_health,
+            launcher_mode=settings.get("COCKPITDECKS_LAUNCHER_MODE", "release"),
+            launcher_pid=self._launcher_process.pid if self._launcher_is_running() else None,
             cockpit_status=cockpit_level,
             cockpit_label=cockpit_text,
+            cockpit_version=session.version if session and session.ok else "",
+            cockpit_uptime=self.metric_uptime.text(),
+            cockpit_aircraft=session.aircraft if session and session.ok else "",
             xplane_status=xp_level,
             xplane_label=xp_text,
             desktop_label=f"v{self._desktop_app_version()}",
@@ -2097,6 +2102,10 @@ class MainWindow(QMainWindow):
             decks=session.decks_detail if session and session.ok else [],
             dataref_rate=self.metric_dataref_rate.text(),
             ws_rate=self.metric_ws_rate.text(),
+            api_host=settings.get("API_HOST", "127.0.0.1"),
+            api_port=settings.get("API_PORT", "8086"),
+            cockpit_web_host=settings.get("COCKPIT_WEB_HOST", "127.0.0.1"),
+            cockpit_web_port=settings.get("COCKPIT_WEB_PORT", "7777"),
         )
 
     def _build_diagnostics_bundle(self) -> dict:
