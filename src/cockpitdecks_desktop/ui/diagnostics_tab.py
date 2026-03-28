@@ -7,6 +7,7 @@ and inline explanations for every metric section.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from cockpitdecks_desktop.ui.sparkline import SparklineWidget
 
 
 # ── Color palette ──────────────────────────────────────────────────
@@ -56,6 +59,14 @@ _QUEUE_CRIT = 100
 _QUEUE_MAX = 150
 
 _MONO = "'Menlo', 'SF Mono', monospace"
+
+
+def _parse_rate(text: str) -> float | None:
+    """Parse a formatted rate string ('12.3', '—', '') to float or None."""
+    try:
+        return float(text) if text not in ("—", "", None) else None
+    except (ValueError, TypeError):
+        return None
 
 
 def _gauge_color(value: float, warn: float, crit: float) -> str:
@@ -202,7 +213,7 @@ def _update_badge(frame: QFrame, status: str, level: str) -> None:
 
 
 class _LatencyGauge(QWidget):
-    """Horizontal gauge bar with avg / max labels."""
+    """Horizontal gauge bar + sparkline trend with avg / max labels."""
 
     def __init__(self, label: str, metric_key: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -212,8 +223,12 @@ class _LatencyGauge(QWidget):
         self._crit = crit
         self._bar_max = bar_max
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 1, 0, 1)
+        vl = QVBoxLayout(self)
+        vl.setContentsMargins(0, 1, 0, 1)
+        vl.setSpacing(2)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
 
         self._name = QLabel(label)
@@ -248,6 +263,13 @@ class _LatencyGauge(QWidget):
         self._detail_lbl.setStyleSheet(f"font-size: 10px; color: {_MUTED}; border: none;")
         row.addWidget(self._detail_lbl, 1)
 
+        vl.addLayout(row)
+
+        self._spark = SparklineWidget(max_points=60, color=QColor(_GREEN))
+        self._spark.setMinimumHeight(26)
+        self._spark.setMaximumHeight(30)
+        vl.addWidget(self._spark)
+
     def set_values(self, avg_ms: float = 0, max_ms: float = 0, detail: str = "") -> None:
         color = _gauge_color(avg_ms, self._warn, self._crit)
         pct = min(1.0, avg_ms / self._bar_max) if self._bar_max > 0 else 0
@@ -257,6 +279,7 @@ class _LatencyGauge(QWidget):
         self._avg_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {color}; border: none; font-family: {_MONO};")
         self._max_lbl.setText(f"max {max_ms:.1f}" if max_ms > 0 else "")
         self._detail_lbl.setText(detail)
+        self._spark.push(avg_ms, QColor(color))
 
     def clear(self) -> None:
         self._bar.setValue(0)
@@ -265,6 +288,7 @@ class _LatencyGauge(QWidget):
         self._avg_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {_DARK}; border: none; font-family: {_MONO};")
         self._max_lbl.setText("")
         self._detail_lbl.setText("")
+        self._spark.clear()
 
 
 # ── Queue depth gauge ─────────────────────────────────────────────
@@ -346,6 +370,97 @@ class _RateRow(QWidget):
 
     def clear(self) -> None:
         self._val.setText("\u2014")
+
+
+# ── Spark row ─────────────────────────────────────────────────────
+
+
+class _SparkRow(QWidget):
+    """Label + rolling sparkline + current value + session peak with timestamp."""
+
+    def __init__(
+        self,
+        label: str,
+        unit: str = "",
+        fixed_max: float | None = None,
+        warn: float | None = None,
+        crit: float | None = None,
+        color: str = _BLUE,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._warn = warn
+        self._crit = crit
+        self._peak: float | None = None
+        self._default_color = QColor(color)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.setSpacing(6)
+
+        name_lbl = QLabel(label)
+        name_lbl.setMinimumWidth(70)
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        name_lbl.setStyleSheet(f"font-size: 11px; font-weight: 500; color: {_MUTED}; border: none;")
+        row.addWidget(name_lbl)
+
+        self._spark = SparklineWidget(max_points=60, fixed_max=fixed_max, color=QColor(color))
+        self._spark.setMinimumHeight(34)
+        self._spark.setMaximumHeight(40)
+        row.addWidget(self._spark, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(0)
+        right.setContentsMargins(0, 0, 0, 0)
+
+        val_row = QHBoxLayout()
+        val_row.setSpacing(2)
+        self._val = QLabel("\u2014")
+        self._val.setMinimumWidth(40)
+        self._val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._val.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {_DARK}; border: none; font-family: {_MONO};"
+        )
+        val_row.addWidget(self._val)
+        if unit:
+            unit_lbl = QLabel(unit)
+            unit_lbl.setStyleSheet(f"font-size: 10px; color: {_MUTED}; border: none;")
+            val_row.addWidget(unit_lbl)
+        right.addLayout(val_row)
+
+        self._peak_lbl = QLabel("")
+        self._peak_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._peak_lbl.setStyleSheet(f"font-size: 9px; color: {_MUTED}; border: none;")
+        right.addWidget(self._peak_lbl)
+
+        row.addLayout(right)
+
+    def push(self, value: float) -> None:
+        from datetime import datetime
+        if self._crit is not None and value >= self._crit:
+            color = QColor(_RED)
+        elif self._warn is not None and value >= self._warn:
+            color = QColor(_AMBER)
+        else:
+            color = self._default_color
+        self._val.setText(f"{value:.0f}")
+        self._val.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {color.name()}; border: none; font-family: {_MONO};"
+        )
+        self._spark.push(value, color)
+        if self._peak is None or value > self._peak:
+            self._peak = value
+            now = datetime.now().strftime("%H:%M")
+            self._peak_lbl.setText(f"\u2191{value:.0f} @ {now}")
+
+    def clear(self) -> None:
+        self._peak = None
+        self._peak_lbl.setText("")
+        self._val.setText("\u2014")
+        self._val.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {_DARK}; border: none; font-family: {_MONO};"
+        )
+        self._spark.clear()
 
 
 # ── Thread bar ────────────────────────────────────────────────────
@@ -541,15 +656,15 @@ class DiagnosticsTab(QWidget):
         pressure_card, pc, self._status_pressure = _card_with_status()
         pc.addWidget(_heading("Runtime Pressure"))
 
-        self._queue_gauge = _QueueGauge()
-        pc.addWidget(self._queue_gauge)
+        self._spark_queue = _SparkRow("Queue Depth", "", warn=float(_QUEUE_WARN), crit=float(_QUEUE_CRIT), color=_GREEN)
+        pc.addWidget(self._spark_queue)
 
-        self._rate_ws = _RateRow("WebSocket", "/s")
-        self._rate_dataref = _RateRow("Dataref", "/s")
-        self._rate_render = _RateRow("Render", "/s")
+        self._spark_dataref = _SparkRow("Dataref", "/s", color=_BLUE)
+        self._spark_ws = _SparkRow("WebSocket", "/s", color=_BLUE)
+        self._spark_render = _SparkRow("Render", "/s", color=_BLUE)
         self._rate_marks = _RateRow("Marks/Flush", "")
         self._rate_uptime = _RateRow("Uptime", "")
-        for r in (self._rate_ws, self._rate_dataref, self._rate_render, self._rate_marks, self._rate_uptime):
+        for r in (self._spark_dataref, self._spark_ws, self._spark_render, self._rate_marks, self._rate_uptime):
             pc.addWidget(r)
 
         pc.addWidget(_hint(
@@ -741,12 +856,29 @@ class DiagnosticsTab(QWidget):
                         ws_rate: str, dataref_rate: str, render_rate: str,
                         marks_per_flush: str, uptime: str) -> None:
         if queue_depth is not None:
-            self._queue_gauge.set_value(queue_depth)
+            self._spark_queue.push(float(queue_depth))
         else:
-            self._queue_gauge.clear()
-        self._rate_ws.set_value(ws_rate)
-        self._rate_dataref.set_value(dataref_rate)
-        self._rate_render.set_value(render_rate)
+            self._spark_queue.clear()
+
+        ws = _parse_rate(ws_rate)
+        dr = _parse_rate(dataref_rate)
+        rr = _parse_rate(render_rate)
+
+        if ws is not None:
+            self._spark_ws.push(ws)
+        else:
+            self._spark_ws.clear()
+
+        if dr is not None:
+            self._spark_dataref.push(dr)
+        else:
+            self._spark_dataref.clear()
+
+        if rr is not None:
+            self._spark_render.push(rr)
+        else:
+            self._spark_render.clear()
+
         self._rate_marks.set_value(marks_per_flush)
         self._rate_uptime.set_value(uptime)
         self._status_pressure.setText(queue_status if queue_status else "")
@@ -839,8 +971,8 @@ class DiagnosticsTab(QWidget):
         for g in (self._gauge_event_loop, self._gauge_flush, self._gauge_render,
                   self._gauge_usb, self._gauge_page):
             g.clear()
-        self._queue_gauge.clear()
-        for r in (self._rate_ws, self._rate_dataref, self._rate_render, self._rate_marks, self._rate_uptime):
+        for r in (self._spark_queue, self._spark_dataref, self._spark_ws, self._spark_render,
+                  self._rate_marks, self._rate_uptime):
             r.clear()
         self.update_threads({})
         self.update_startup("\u2014", "\u2014", "\u2014", "\u2014", "\u2014")
