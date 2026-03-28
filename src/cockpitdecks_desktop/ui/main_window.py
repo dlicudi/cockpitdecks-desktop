@@ -252,12 +252,11 @@ class MainWindow(QMainWindow):
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setObjectName("stopButton")
         self.btn_reload = QPushButton("Reload")
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_check = QPushButton("Check")
-        self.btn_export_diag = QPushButton("Export")
-        self.btn_update = QPushButton("Updates")
+        self.btn_reload.setToolTip("Reload cockpitdecks so new config takes effect.")
+        self.btn_check = QPushButton("Preflight")
+        self.btn_check.setToolTip("Check launcher, ports, X-Plane and Cockpitdecks connectivity.")
         for b in (self.btn_start, self.btn_restart, self.btn_stop,
-                  self.btn_reload, self.btn_refresh, self.btn_check, self.btn_export_diag, self.btn_update):
+                  self.btn_reload, self.btn_check):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
 
         ab_layout.addWidget(self.btn_start)
@@ -268,10 +267,8 @@ class MainWindow(QMainWindow):
         ab_sep.setFrameShape(QFrame.Shape.VLine)
         ab_sep.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
         ab_layout.addWidget(ab_sep)
-        ab_layout.addWidget(self.btn_refresh)
         ab_layout.addWidget(self.btn_check)
-        ab_layout.addWidget(self.btn_export_diag)
-        ab_layout.addWidget(self.btn_update)
+
         ab_layout.addStretch(1)
 
         # ════════════════════════════════════════
@@ -763,10 +760,9 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status)
 
         # ── Connections ──
-        self.btn_refresh.clicked.connect(self.refresh_info_panel)
         self.btn_check.clicked.connect(self.run_preflight)
-        self.btn_export_diag.clicked.connect(self.export_diagnostics_bundle)
-        self.btn_update.clicked.connect(self.check_updates)
+        self.diag_tab.export_requested.connect(self.export_diagnostics_bundle)
+
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
         self.btn_stop.clicked.connect(self.stop_cockpitdecks)
@@ -1748,9 +1744,8 @@ class MainWindow(QMainWindow):
             self.btn_reload.setToolTip("Cockpitdecks is not running.")
 
     def _set_busy(self, busy: bool) -> None:
-        self.btn_refresh.setEnabled(not busy)
         self.btn_check.setEnabled(not busy)
-        self.btn_update.setEnabled(not busy)
+
         self._refresh_start_stop_buttons(busy=busy)
         self.statusBar().showMessage("Working..." if busy else "Ready")
         if busy:
@@ -2300,10 +2295,6 @@ class MainWindow(QMainWindow):
         ok, msg = api_reload_decks(base_url=cockpit_web_base(st))
         tag = "reload" if ok else "error"
         self._append(f"[{tag}] {msg}")
-
-    def check_updates(self) -> None:
-        self._append("[update] In-app updates are not implemented yet.")
-        self._append("[update] Install a newer Cockpitdecks Desktop release when available.")
 
     def start_cockpitdecks(self) -> None:
         launcher = self._resolve_launcher_binary()
