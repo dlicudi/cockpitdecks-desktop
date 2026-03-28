@@ -1,0 +1,128 @@
+name: Release Cockpitdecks Desktop macOS arm64
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish (e.g. v0.3.0-beta.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cockpitdecks-desktop-macos-arm64-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout cockpitdecks-desktop
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        env:
+          MANUAL_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${MANUAL_RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
+          if [[ -z "${RELEASE_TAG}" ]]; then
+            echo "::error::Unable to determine release tag"
+            exit 1
+          fi
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
+          {
+            echo "### Desktop release configuration"
+            echo
+            echo "- release tag: \`${RELEASE_TAG}\`"
+            echo "- runner architecture: \`$(uname -m)\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml', 'packaging/pyinstaller/desktop.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Build desktop app
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip setuptools wheel hatchling
+          python -m pip install pyinstaller
+          python -m pip install -e .
+          scripts/generate_icns.sh
+          pyinstaller --clean packaging/pyinstaller/desktop.spec
+
+      - name: Verify desktop app
+        run: |
+          test -d "dist/Cockpitdecks Desktop.app"
+          echo "[verify] app bundle exists: dist/Cockpitdecks Desktop.app"
+
+      - name: Package release artifact
+        run: |
+          set -euo pipefail
+          ARTIFACT_BASENAME="cockpitdecks-desktop-macos-arm64-${RELEASE_TAG}"
+          cd dist
+          zip -r "../${ARTIFACT_BASENAME}.zip" "Cockpitdecks Desktop.app"
+          cd ..
+          shasum -a 256 "${ARTIFACT_BASENAME}.zip" > "${ARTIFACT_BASENAME}.zip.sha256"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}
+          path: |
+            cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}.zip
+            cockpitdecks-desktop-macos-arm64-${{ env.RELEASE_TAG }}.zip.sha256
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${RELEASE_TAG}$" | head -1) || true
+          {
+            echo "### Cockpitdecks Desktop ${RELEASE_TAG}"
+            echo ""
+            echo "macOS Apple Silicon (arm64) app bundle."
+            echo ""
+            if [[ -n "${PREV_TAG}" ]]; then
+              echo "#### Changes since ${PREV_TAG}"
+              echo ""
+              git log "${PREV_TAG}..${RELEASE_TAG}" --pretty=format:"- %s" --no-merges 2>/dev/null || true
+              echo ""
+              echo ""
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${RELEASE_TAG}"
+            fi
+          } > release-notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_BASENAME="cockpitdecks-desktop-macos-arm64-${RELEASE_TAG}"
+          gh release create "${RELEASE_TAG}" \
+            --title "${RELEASE_TAG}" \
+            --notes-file release-notes.md \
+            --target "${{ github.sha }}" \
+            "${ARTIFACT_BASENAME}.zip" \
+            "${ARTIFACT_BASENAME}.zip.sha256"
