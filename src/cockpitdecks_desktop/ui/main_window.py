@@ -545,12 +545,52 @@ class MainWindow(QMainWindow):
         tab_decks_layout.setContentsMargins(12, 12, 12, 12)
         tab_decks_layout.setSpacing(10)
 
-        decks_intro = QLabel(
-            "Import a deck zip or pick a local deck target to make it the default launch target."
+        # ── Segmented toggle: Installed | Available ──
+        from PySide6.QtWidgets import QButtonGroup
+
+        seg_container = QWidget()
+        seg_container.setFixedHeight(32)
+        seg_container.setStyleSheet(
+            "QWidget { background: #f1f5f9; border-radius: 8px; }"
         )
-        decks_intro.setWordWrap(True)
-        decks_intro.setStyleSheet("font-size: 13px; color: #475569; border: none;")
-        tab_decks_layout.addWidget(decks_intro)
+        seg_inner = QHBoxLayout(seg_container)
+        seg_inner.setContentsMargins(3, 3, 3, 3)
+        seg_inner.setSpacing(2)
+
+        self._decks_seg_installed = QPushButton("Installed")
+        self._decks_seg_available = QPushButton("Available")
+        self._decks_seg_archive = QPushButton("Archive")
+        for btn in (self._decks_seg_installed, self._decks_seg_available, self._decks_seg_archive):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setCheckable(True)
+            btn.setFixedHeight(26)
+            seg_inner.addWidget(btn)
+
+        self._decks_seg_installed.setChecked(True)
+        seg_group = QButtonGroup(self)
+        seg_group.setExclusive(True)
+        seg_group.addButton(self._decks_seg_installed, 0)
+        seg_group.addButton(self._decks_seg_available, 1)
+        seg_group.addButton(self._decks_seg_archive, 2)
+
+        self._apply_seg_styles(0)
+
+        decks_toggle_row = QHBoxLayout()
+        decks_toggle_row.setContentsMargins(0, 0, 0, 0)
+        decks_toggle_row.addWidget(seg_container)
+        decks_toggle_row.addStretch(1)
+        tab_decks_layout.addLayout(decks_toggle_row)
+
+        # ── Stacked content: page 0 = Installed, page 1 = Available ──
+        from PySide6.QtWidgets import QStackedWidget
+
+        self._decks_stack = QStackedWidget()
+
+        # Page 0: Installed decks
+        installed_page = QWidget()
+        installed_layout = QVBoxLayout(installed_page)
+        installed_layout.setContentsMargins(0, 0, 0, 0)
+        installed_layout.setSpacing(8)
 
         decks_toolbar = QHBoxLayout()
         decks_toolbar.setSpacing(8)
@@ -567,7 +607,7 @@ class MainWindow(QMainWindow):
         decks_toolbar.addWidget(self.btn_decks_select)
         decks_toolbar.addWidget(self.btn_decks_reveal)
         decks_toolbar.addStretch(1)
-        tab_decks_layout.addLayout(decks_toolbar)
+        installed_layout.addLayout(decks_toolbar)
 
         self._selected_deck_path: str = ""
         self._deck_grid_container = QWidget()
@@ -585,11 +625,31 @@ class MainWindow(QMainWindow):
             "QScrollArea { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }"
         )
         self._deck_grid_area.setWidget(self._deck_grid_container)
-        tab_decks_layout.addWidget(self._deck_grid_area, 1)
+        installed_layout.addWidget(self._deck_grid_area, 1)
 
         self.decks_summary = QLabel("No targets discovered yet.")
         self.decks_summary.setStyleSheet("font-size: 12px; color: #64748b; border: none;")
-        tab_decks_layout.addWidget(self.decks_summary)
+        installed_layout.addWidget(self.decks_summary)
+
+        self._decks_stack.addWidget(installed_page)  # index 0
+
+        # Page 1: Available packs (latest per pack)
+        self.deck_packs_tab = DeckPacksTab(show_all_versions=False)
+        self.deck_packs_tab.installed.connect(self._on_pack_installed)
+        self.deck_packs_tab.uninstalled.connect(self._on_pack_uninstalled)
+        self.deck_packs_tab.log_line.connect(self._append)
+        self._decks_stack.addWidget(self.deck_packs_tab)  # index 1
+
+        # Page 2: Archive (all versions)
+        self.deck_packs_archive = DeckPacksTab(show_all_versions=True)
+        self.deck_packs_archive.installed.connect(self._on_pack_installed)
+        self.deck_packs_archive.uninstalled.connect(self._on_pack_uninstalled)
+        self.deck_packs_archive.log_line.connect(self._append)
+        self._decks_stack.addWidget(self.deck_packs_archive)  # index 2
+
+        tab_decks_layout.addWidget(self._decks_stack, 1)
+
+        seg_group.idClicked.connect(self._on_decks_segment_changed)
 
         # ════════════════════════════════════════
         #  LOGS TAB
@@ -686,18 +746,13 @@ class MainWindow(QMainWindow):
         self.releases_tab.installed.connect(self._on_release_installed)
         self.releases_tab.log_line.connect(self._append)
 
-        self.deck_packs_tab = DeckPacksTab()
-        self.deck_packs_tab.installed.connect(self._on_pack_installed)
-        self.deck_packs_tab.log_line.connect(self._append)
-
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
+        self.tabs.addTab(tab_decks, "Decks")
+        self.tabs.addTab(self.releases_tab, "Releases")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(tab_diag, "Diagnostics")
-        self.tabs.addTab(tab_decks, "Decks")
-        self.tabs.addTab(self.deck_packs_tab, "Deck Packs")
         self.tabs.addTab(tab_logs, "Logs")
-        self.tabs.addTab(self.releases_tab, "Releases")
 
         root.addWidget(header)
         root.addWidget(action_bar)
@@ -1439,6 +1494,19 @@ class MainWindow(QMainWindow):
             ll.setStyleSheet("font-size: 9px; color: #94a3b8;")
             cl.addWidget(ll)
 
+        # ── Uninstall button (managed decks only) ──────────────────
+        if managed and not is_active:
+            del_btn = QPushButton("Uninstall")
+            del_btn.setStyleSheet(
+                "QPushButton { padding: 2px 8px; border-radius: 4px; font-size: 9px; min-height: 0;"
+                " color: #b91c1c; border: 1px solid #fecaca; background: transparent; }"
+                "QPushButton:hover { background: #fef2f2; }"
+            )
+            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            path = info.path
+            del_btn.clicked.connect(lambda _checked, p=path: self._uninstall_managed_deck(p))
+            cl.addWidget(del_btn)
+
         return card
 
     def _populate_decks_list(self) -> None:
@@ -1538,6 +1606,25 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             self._append(f"[error] could not reveal target folder {target}: {exc}")
 
+    _SEG_ACTIVE = (
+        "QPushButton { background: #3b82f6; color: #ffffff; font-size: 12px; font-weight: 600;"
+        " border: none; border-radius: 6px; padding: 2px 18px; min-height: 0; }"
+    )
+    _SEG_INACTIVE = (
+        "QPushButton { background: transparent; color: #64748b; font-size: 12px; font-weight: 500;"
+        " border: none; border-radius: 6px; padding: 2px 18px; min-height: 0; }"
+        "QPushButton:hover { color: #1e293b; background: #e2e8f0; }"
+    )
+
+    def _apply_seg_styles(self, active_idx: int) -> None:
+        self._decks_seg_installed.setStyleSheet(self._SEG_ACTIVE if active_idx == 0 else self._SEG_INACTIVE)
+        self._decks_seg_available.setStyleSheet(self._SEG_ACTIVE if active_idx == 1 else self._SEG_INACTIVE)
+        self._decks_seg_archive.setStyleSheet(self._SEG_ACTIVE if active_idx == 2 else self._SEG_INACTIVE)
+
+    def _on_decks_segment_changed(self, idx: int) -> None:
+        self._decks_stack.setCurrentIndex(idx)
+        self._apply_seg_styles(idx)
+
     def _resolve_launcher_binary(self) -> Path:
         """Resolve cockpitdecks executable: Config override → managed install → bundled (frozen) → dev dist."""
         override = launcher_binary_path(load_desktop_settings())
@@ -1571,10 +1658,35 @@ class MainWindow(QMainWindow):
         self._append(f"[releases] cockpitdecks {tag} installed — ready to start")
         self._refresh_start_stop_buttons()
 
+    def _uninstall_managed_deck(self, path: str) -> None:
+        """Remove a managed deck from the library."""
+        import shutil
+        target = Path(path)
+        if not target.is_dir():
+            self._append(f"[error] deck not found: {path}")
+            return
+        if not self._is_managed_target(target):
+            self._append(f"[error] cannot uninstall non-managed deck: {path}")
+            return
+        name = target.name
+        shutil.rmtree(target)
+        self._append(f"[packs] uninstalled {name}")
+        self._refresh_pack_views()
+
     def _on_pack_installed(self, tag: str) -> None:
         """Called after a deck pack is installed from the Deck Packs tab."""
         self._append(f"[packs] deck pack {tag} installed")
+        self._refresh_pack_views()
+
+    def _on_pack_uninstalled(self, pack_id: str) -> None:
+        """Called after a deck pack is uninstalled."""
+        self._append(f"[packs] deck pack {pack_id} uninstalled")
+        self._refresh_pack_views()
+
+    def _refresh_pack_views(self) -> None:
         self._refresh_launch_targets()
+        self.deck_packs_tab.refresh()
+        self.deck_packs_archive.refresh()
 
     def _command_worker_busy(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
