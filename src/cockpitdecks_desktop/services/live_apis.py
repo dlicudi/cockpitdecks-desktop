@@ -122,6 +122,11 @@ class SessionInfo:
     decks: str
     config_path: str
     error: str
+    decks_detail: list[dict] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.decks_detail is None:
+            self.decks_detail = []
 
     @property
     def ok(self) -> bool:
@@ -146,13 +151,17 @@ def fetch_session_info(*, base_url: str = "http://127.0.0.1:7777", timeout: floa
             return SessionInfo("", "", "", "", "invalid JSON")
         name = (data.get("aircraft_name") or "").strip() or "—"
         dcp = (data.get("deckconfig_path") or "").strip() or "—"
-        decks = data.get("deck_names")
-        if isinstance(decks, list) and decks:
-            deck_part = f"{len(decks)} deck(s): {', '.join(str(d) for d in decks[:4])}" + ("…" if len(decks) > 4 else "")
+        ver = (data.get("cockpitdecks_version") or "").strip()
+        # Prefer richer decks array; fall back to deck_names list
+        decks_detail: list[dict] = []
+        if isinstance(data.get("decks"), list):
+            decks_detail = [d for d in data["decks"] if isinstance(d, dict)]
+        deck_names = [d.get("name", "") for d in decks_detail] or data.get("deck_names") or []
+        if deck_names:
+            deck_part = f"{len(deck_names)} deck(s): {', '.join(str(d) for d in deck_names[:4])}" + ("…" if len(deck_names) > 4 else "")
         else:
             deck_part = "no decks"
-        ver = (data.get("cockpitdecks_version") or "").strip()
-        return SessionInfo(ver, name, deck_part, dcp, "")
+        return SessionInfo(ver, name, deck_part, dcp, "", decks_detail)
     except HTTPError as exc:
         if exc.code == 404:
             return SessionInfo("", "", "", "", "update Cockpitdecks: /api/status missing")

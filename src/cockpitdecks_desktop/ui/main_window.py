@@ -2003,8 +2003,25 @@ class MainWindow(QMainWindow):
         hw_text = "\u2014"
         hw_ok: bool | None = None
         if self._last_session_info is not None and self._last_session_info.ok:
-            hw_text = self._last_session_info.decks
-            hw_ok = "no decks" not in hw_text.lower()
+            detail = self._last_session_info.decks_detail
+            if detail:
+                connected = [d for d in detail if d.get("connected") and not d.get("virtual")]
+                virtual = [d for d in detail if d.get("virtual")]
+                physical = [d for d in detail if not d.get("virtual")]
+                parts = []
+                if physical:
+                    conn_count = len(connected)
+                    phys_count = len(physical)
+                    status = "all connected" if conn_count == phys_count else f"{conn_count}/{phys_count} connected"
+                    names = ", ".join(d.get("name", "?") for d in physical[:3]) + ("…" if len(physical) > 3 else "")
+                    parts.append(f"{names} ({status})")
+                if virtual:
+                    parts.append(f"{len(virtual)} virtual")
+                hw_text = "  ·  ".join(parts) if parts else "no decks"
+                hw_ok = len(connected) > 0 if physical else None
+            else:
+                hw_text = self._last_session_info.decks
+                hw_ok = "no decks" not in hw_text.lower()
         elif self._last_session_info is not None:
             hw_text = "unknown (no session)"
 
