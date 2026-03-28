@@ -450,15 +450,10 @@ class MainWindow(QMainWindow):
         counters_grid = QGridLayout()
         counters_grid.setSpacing(6)
         _counters = [
-            (self.metric_threads, "Threads"),
-            (self.metric_variables, "Variables"),
-            (self.metric_datarefs, "Datarefs"),
-            (self.metric_dataref_rate, "Dataref/s"),
             (self.metric_queue_depth, "Queue"),
-            (self.metric_dirty_rendered, "Render/s"),
-            (self.metric_ws_rate, "WS msg/s"),
-            (self.metric_marks_per_flush, "Marks/flush"),
             (self.metric_uptime, "Uptime"),
+            (self.metric_dataref_rate, "Dataref/s"),
+            (self.metric_dirty_rendered, "Render/s"),
         ]
         _cols = 4
         for idx, (val_label, caption) in enumerate(_counters):
@@ -481,7 +476,8 @@ class MainWindow(QMainWindow):
         # ════════════════════════════════════════
         #  DIAGNOSTICS ROW
         # ════════════════════════════════════════
-        diag_card = _card(bg="#fafafa", border="#e5e7eb")
+        self._diag_card = _card(bg="#fafafa", border="#e5e7eb")
+        diag_card = self._diag_card
         diag_layout = QHBoxLayout(diag_card)
         diag_layout.setContentsMargins(16, 10, 16, 10)
         diag_layout.setSpacing(10)
@@ -508,8 +504,6 @@ class MainWindow(QMainWindow):
         cards_row.addWidget(conn_card, 3)
         cards_row.addWidget(self.metrics_card, 2)
         si.addLayout(cards_row, 1)
-
-        si.addWidget(diag_card)
 
         status_scroll = QScrollArea()
         status_scroll.setWidgetResizable(True)
