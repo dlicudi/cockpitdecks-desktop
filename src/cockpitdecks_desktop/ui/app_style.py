@@ -13,10 +13,10 @@ QFrame#actionBar {
 QPushButton {
     background-color: #ffffff;
     border: 1px solid #c5c9d3;
-    border-radius: 8px;
-    padding: 9px 18px;
-    min-width: 90px;
-    min-height: 18px;
+    border-radius: 6px;
+    padding: 5px 14px;
+    min-width: 80px;
+    min-height: 0;
     font-weight: 500;
     color: #1c1c1e;
 }
@@ -64,15 +64,13 @@ QPushButton#primaryButton:disabled {
 }
 
 QPushButton#stopButton {
-    background-color: #ffffff;
     color: #b91c1c;
-    border: 1px solid #f87171;
     font-weight: 600;
 }
 
 QPushButton#stopButton:hover {
     background-color: #fef2f2;
-    border-color: #ef4444;
+    border-color: #aeb4bf;
 }
 
 QPushButton#stopButton:pressed {
@@ -80,8 +78,8 @@ QPushButton#stopButton:pressed {
 }
 
 QPushButton#stopButton:disabled {
-    color: #d4a5a5;
-    background-color: #fafafa;
-    border-color: #e8e8e8;
+    color: #a1a6b0;
+    background-color: #f4f5f7;
+    border-color: #dde0e6;
 }
 """

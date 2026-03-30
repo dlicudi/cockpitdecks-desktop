@@ -254,31 +254,13 @@ class MainWindow(QMainWindow):
         self.btn_stop.setObjectName("stopButton")
         self.btn_reload = QPushButton("Reload")
         self.btn_reload.setToolTip("Reload cockpitdecks so new config takes effect.")
-        self.btn_check = QPushButton("Preflight")
-        self.btn_check.setToolTip("Check launcher, ports, X-Plane and Cockpitdecks connectivity.")
-        for b in (self.btn_start, self.btn_restart, self.btn_stop,
-                  self.btn_reload, self.btn_check):
+        for b in (self.btn_start, self.btn_restart, self.btn_stop, self.btn_reload):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
 
         ab_layout.addWidget(self.btn_start)
         ab_layout.addWidget(self.btn_restart)
         ab_layout.addWidget(self.btn_stop)
         ab_layout.addWidget(self.btn_reload)
-        ab_sep = QFrame()
-        ab_sep.setFrameShape(QFrame.Shape.VLine)
-        ab_sep.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
-        ab_layout.addWidget(ab_sep)
-        ab_layout.addWidget(self.btn_check)
-        ab_sep2 = QFrame()
-        ab_sep2.setFrameShape(QFrame.Shape.VLine)
-        ab_sep2.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
-        ab_layout.addWidget(ab_sep2)
-        self.btn_export = QPushButton("Export Diagnostics…")
-        self.btn_export.setToolTip("Save a diagnostics bundle to a JSON file.")
-        self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_export.clicked.connect(self.export_diagnostics_bundle)
-        ab_layout.addWidget(self.btn_export)
-
         ab_layout.addStretch(1)
 
         # ════════════════════════════════════════
@@ -465,21 +447,35 @@ class MainWindow(QMainWindow):
         self.info_runtime_metrics.setVisible(False)
 
         # ════════════════════════════════════════
-        #  DIAGNOSTICS ROW
+        #  PREFLIGHT CHECKLIST CARD
         # ════════════════════════════════════════
-        self._diag_card = _card(bg="#fafafa", border="#e5e7eb")
-        diag_card = self._diag_card
-        diag_layout = QHBoxLayout(diag_card)
-        diag_layout.setContentsMargins(16, 10, 16, 10)
-        diag_layout.setSpacing(10)
-        diag_lbl = QLabel("Last preflight")
-        diag_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280; border: none;")
-        diag_layout.addWidget(diag_lbl)
-        diag_layout.addWidget(self.info_last_check, 1)
-        diag_warn_lbl = QLabel("Diagnostics")
-        diag_warn_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #6b7280; border: none;")
-        diag_layout.addWidget(diag_warn_lbl)
-        diag_layout.addWidget(self.info_diag_warning, 2)
+        preflight_card = _card(bg="#fafafa", border="#e5e7eb")
+        preflight_layout = QVBoxLayout(preflight_card)
+        preflight_layout.setContentsMargins(16, 12, 16, 12)
+        preflight_layout.setSpacing(6)
+        preflight_layout.addWidget(_section_heading("Preflight"))
+
+        def _check_row(label: str) -> tuple[QLabel, QLabel]:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            rl.setSpacing(8)
+            icon = QLabel("—")
+            icon.setFixedWidth(16)
+            icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon.setStyleSheet("font-size: 12px; border: none;")
+            lbl = QLabel(label)
+            lbl.setStyleSheet("font-size: 11px; color: #374151; border: none;")
+            rl.addWidget(icon)
+            rl.addWidget(lbl, 1)
+            preflight_layout.addWidget(row)
+            return icon, lbl
+
+        self._pf_launcher_icon, self._pf_launcher_lbl   = _check_row("Launcher binary")
+        self._pf_port_icon,     self._pf_port_lbl       = _check_row("Port available")
+        self._pf_xplane_icon,   self._pf_xplane_lbl     = _check_row("X-Plane API")
+        self._pf_cockpit_icon,  self._pf_cockpit_lbl    = _check_row("Cockpitdecks")
+        preflight_layout.addStretch(1)
 
         # ════════════════════════════════════════
         #  ASSEMBLE STATUS TAB
@@ -493,6 +489,7 @@ class MainWindow(QMainWindow):
         cards_row.addWidget(conn_card, 3)
         cards_row.addWidget(self.metrics_card, 2)
         si.addLayout(cards_row, 1)
+        si.addWidget(preflight_card)
 
         status_scroll = QScrollArea()
         status_scroll.setWidgetResizable(True)
@@ -524,7 +521,27 @@ class MainWindow(QMainWindow):
         #  DIAGNOSTICS TAB
         # ════════════════════════════════════════
         self.diag_tab = DiagnosticsTab()
-        tab_diag = self.diag_tab
+        tab_diag = QWidget()
+        tab_diag_layout = QVBoxLayout(tab_diag)
+        tab_diag_layout.setContentsMargins(0, 0, 0, 0)
+        tab_diag_layout.setSpacing(0)
+        tab_diag_layout.addWidget(self.diag_tab, 1)
+        diag_footer = QWidget()
+        diag_footer.setStyleSheet("background: #f8fafc; border-top: 1px solid #e2e5eb;")
+        diag_footer_layout = QHBoxLayout(diag_footer)
+        diag_footer_layout.setContentsMargins(12, 6, 12, 6)
+        diag_footer_layout.addStretch(1)
+        self.btn_export = QPushButton("Export Diagnostics…")
+        self.btn_export.setToolTip("Save a diagnostics bundle to a JSON file.")
+        self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 4px 12px; border-radius: 6px;"
+            " border: 1px solid #cbd5e1; background: #ffffff; color: #374151; min-height: 0; }"
+            "QPushButton:hover { background: #f1f5f9; }"
+        )
+        self.btn_export.clicked.connect(self.export_diagnostics_bundle)
+        diag_footer_layout.addWidget(self.btn_export)
+        tab_diag_layout.addWidget(diag_footer)
 
         # ════════════════════════════════════════
         #  DECKS TAB
@@ -755,8 +772,6 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status)
 
         # ── Connections ──
-        self.btn_check.clicked.connect(self.run_preflight)
-
         self.btn_start.clicked.connect(self.start_cockpitdecks)
         self.btn_restart.clicked.connect(self.restart_cockpitdecks)
         self.btn_stop.clicked.connect(self.stop_cockpitdecks)
@@ -1745,7 +1760,7 @@ class MainWindow(QMainWindow):
         port_listener = self._cockpit_web_port_listener()
         port_in_use = port_listener is not None
         self.btn_stop.setEnabled(not cmd_busy and (running or port_in_use))
-        can_restart = not cmd_busy and launcher_ok and (running or not port_in_use)
+        can_restart = not cmd_busy and launcher_ok and running
         self.btn_restart.setEnabled(can_restart)
         can_start = not cmd_busy and not running and launcher_ok and not port_in_use
         self.btn_start.setEnabled(can_start)
@@ -1794,8 +1809,6 @@ class MainWindow(QMainWindow):
             self.btn_reload.setToolTip("Cockpitdecks is not running.")
 
     def _set_busy(self, busy: bool) -> None:
-        self.btn_check.setEnabled(not busy)
-
         self._refresh_start_stop_buttons(busy=busy)
         self.statusBar().showMessage("Working..." if busy else "Ready")
         if busy:
@@ -2339,8 +2352,55 @@ class MainWindow(QMainWindow):
         web_lower = cockpit_web_line.lower()
         self._set_dot(self._dot_cockpit_web, "error" if "unreachable" in web_lower else "ok")
 
-    def _mark_preflight_time(self) -> None:
-        self.info_last_check.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self._update_preflight_checks(xplane_line, cockpit_web_line, session_info)
+
+    def _update_preflight_checks(self, xplane_line: str, cockpit_web_line: str, session_info: "SessionInfo") -> None:
+        def _set(icon: QLabel, lbl: QLabel, ok: bool | None, text: str) -> None:
+            if ok is True:
+                icon.setText("✓")
+                icon.setStyleSheet("font-size: 12px; color: #16a34a; border: none;")
+            elif ok is False:
+                icon.setText("✗")
+                icon.setStyleSheet("font-size: 12px; color: #dc2626; border: none;")
+            else:
+                icon.setText("—")
+                icon.setStyleSheet("font-size: 12px; color: #94a3b8; border: none;")
+            lbl.setText(text)
+
+        launcher = self._resolve_launcher_binary()
+        _set(self._pf_launcher_icon, self._pf_launcher_lbl,
+             launcher.exists(),
+             f"Launcher binary — {'found' if launcher.exists() else 'missing'}")
+
+        wport = self._web_listen_port()
+        listener = self._cockpit_web_port_listener()
+        cockpit_running = self._launcher_is_running()
+        if listener is not None:
+            if cockpit_running:
+                _set(self._pf_port_icon, self._pf_port_lbl, True,
+                     f"Port {wport} — in use by Cockpitdecks (PID {listener[0]})")
+            else:
+                _set(self._pf_port_icon, self._pf_port_lbl, False,
+                     f"Port {wport} — in use by another process (PID {listener[0]})")
+        else:
+            _set(self._pf_port_icon, self._pf_port_lbl, True,
+                 f"Port {wport} — available")
+
+        xp_ok = "unreachable" not in xplane_line.lower()
+        _set(self._pf_xplane_icon, self._pf_xplane_lbl, xp_ok,
+             f"X-Plane API — {xplane_line}")
+
+        cockpit_ok = session_info.ok
+        cockpit_running = "unreachable" not in cockpit_web_line.lower()
+        if cockpit_ok:
+            _set(self._pf_cockpit_icon, self._pf_cockpit_lbl, True,
+                 f"Cockpitdecks — v{session_info.version} running")
+        elif cockpit_running:
+            _set(self._pf_cockpit_icon, self._pf_cockpit_lbl, None,
+                 "Cockpitdecks — reachable, not ready")
+        else:
+            _set(self._pf_cockpit_icon, self._pf_cockpit_lbl, False,
+                 "Cockpitdecks — not running")
 
     def _start_steps(self, steps: list[CommandStep]) -> None:
         if self._thread is not None and self._thread.isRunning():
@@ -2362,26 +2422,6 @@ class MainWindow(QMainWindow):
         self._append(f"[{tag}] {message}")
         self.refresh_info_panel()
 
-    def run_preflight(self) -> None:
-        self._mark_preflight_time()
-        self._append("[preflight] running checks...")
-        self._append(f"[preflight] desktop app: v{self._desktop_app_version()}")
-        launcher = self._resolve_launcher_binary()
-        self._append(f"[preflight] launcher binary: {'OK' if launcher.exists() else 'MISSING'} ({launcher})")
-        st = load_desktop_settings()
-        wport = self._web_listen_port()
-        listener = self._cockpit_web_port_listener()
-        if listener is not None:
-            self._append(f"[preflight] TCP :{wport}: IN USE pid={listener[0]} ({listener[1]})")
-        else:
-            self._append(f"[preflight] TCP :{wport}: free")
-        xp_line, _ = xplane_capabilities_status_line(base_url=xplane_rest_base(st))
-        self._append(f"[preflight] X-Plane API: {xp_line}")
-        web_line, _ = cockpitdecks_web_status_line(url=f"{cockpit_web_base(st)}/")
-        self._append(f"[preflight] Cockpitdecks web: {web_line}")
-        self._append(f"[preflight] Loaded session: {fetch_session_info(base_url=cockpit_web_base(st)).one_line()}")
-        self._append("[preflight] complete.")
-        self.refresh_info_panel()
 
     def reload_decks(self) -> None:
         self._append("[reload] requesting deck config reload...")
