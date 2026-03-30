@@ -34,9 +34,9 @@ If you need `cockpitdecks` separately, see:
 
 ![Releases](docs/screenshots/releases.png)
 
-### Topology
+### Diagnostics
 
-![Topology](docs/screenshots/topology.png)
+![Diagnostics](docs/screenshots/diagnostics.png)
 
 ## What The App Does
 
