@@ -91,18 +91,16 @@ class TopologyTab(QWidget):
 
     def _default_nodes(self) -> list[_Node]:
         return [
-            _Node("desktop",       "Desktop App",    status="ok",               W=150, H=58),
-            _Node("launcher",      "Launcher",                                   W=150, H=58),
-            _Node("cockpitdecks",  "Cockpitdecks",   hub=True,                  W=170, H=76),
-            _Node("xplane_webapi", "xplane-webapi",  component=True,            W=140, H=52),
-            _Node("xplane",        "X-Plane",                                    W=150, H=58),
+            _Node("desktop",       "Desktop App",   status="ok",  W=150, H=58),
+            _Node("cockpitdecks",  "Cockpitdecks",  hub=True,     W=170, H=76),
+            _Node("xplane_webapi", "xplane-webapi", component=True, W=140, H=52),
+            _Node("xplane",        "X-Plane",                      W=150, H=58),
         ]
 
     def _default_edges(self) -> list[_Edge]:
         return [
-            _Edge("desktop",       "launcher",      "spawns",              dashed=True),
+            _Edge("desktop",       "cockpitdecks",  "starts",              dashed=True),
             _Edge("desktop",       "cockpitdecks",  "HTTP"),
-            _Edge("desktop",       "xplane",        "REST",                dashed=True),
             _Edge("cockpitdecks",  "xplane_webapi", ""),
             _Edge("xplane_webapi", "xplane",        "WebSocket",           bidirectional=True),
         ]
@@ -130,8 +128,6 @@ class TopologyTab(QWidget):
         decks: list[dict],
         dataref_rate: str = "",
         ws_rate: str = "",
-        api_host: str = "127.0.0.1",
-        api_port: str = "8086",
         cockpit_web_host: str = "127.0.0.1",
         cockpit_web_port: str = "7777",
     ) -> None:
@@ -153,16 +149,7 @@ class TopologyTab(QWidget):
 
         node_map["desktop"].subtitle = desktop_label
 
-        # Launcher: show mode and PID when running
-        launcher_sub = launcher_label
-        mode_str = "custom" if launcher_custom else "managed"
-        launcher_sub += f" · {mode_str}"
-        if launcher_running and launcher_pid is not None:
-            launcher_sub += f" · PID {launcher_pid}"
-        node_map["launcher"].subtitle = launcher_sub
-        node_map["launcher"].status = launcher_status
-
-        # Cockpitdecks hub: version + uptime on subtitle, aircraft on detail
+        # Cockpitdecks hub: version + uptime on subtitle, aircraft + PID on detail
         if cockpit_version or (cockpit_uptime and cockpit_uptime not in ("—", "")):
             sub_parts = []
             if cockpit_version:
@@ -171,11 +158,21 @@ class TopologyTab(QWidget):
             if cockpit_uptime and cockpit_uptime not in ("—", ""):
                 sub_parts.append(cockpit_uptime)
             node_map["cockpitdecks"].subtitle = " · ".join(sub_parts)
-            node_map["cockpitdecks"].detail = cockpit_aircraft or cockpit_label
+            detail_parts = []
+            if cockpit_aircraft:
+                detail_parts.append(cockpit_aircraft)
+            elif cockpit_label:
+                detail_parts.append(cockpit_label)
+            if launcher_running and launcher_pid is not None:
+                detail_parts.append(f"PID {launcher_pid}")
+            node_map["cockpitdecks"].detail = " · ".join(detail_parts)
         else:
-            node_map["cockpitdecks"].subtitle = cockpit_label
+            sub_parts = [cockpit_label] if cockpit_label else []
+            if launcher_running and launcher_pid is not None:
+                sub_parts.append(f"PID {launcher_pid}")
+            node_map["cockpitdecks"].subtitle = " · ".join(sub_parts)
             node_map["cockpitdecks"].detail = ""
-        node_map["cockpitdecks"].status = cockpit_status
+        node_map["cockpitdecks"].status = cockpit_status if cockpit_status != "neutral" else launcher_status
 
         node_map["xplane"].subtitle = xplane_label
         node_map["xplane"].status = xplane_status
@@ -232,19 +229,15 @@ class TopologyTab(QWidget):
 
         xp_metric = f"{dataref_rate} ref/s" if dataref_rate not in ("—", "", None) else ""
         cockpit_addr = f"{cockpit_web_host or '127.0.0.1'}:{cockpit_web_port or '7777'}"
-        xp_addr = f"{api_host or '127.0.0.1'}:{api_port or '8086'}"
 
         ws_status = _es(cockpit_reachable if xplane_reachable else None)
 
+        mode_str = "custom" if launcher_custom else "managed"
         self._edges = [
-            _Edge("desktop", "launcher", "spawns",
-                  status="ok" if launcher_running else "neutral", dashed=True),
-            _Edge("desktop", "cockpitdecks", "HTTP",
-                  metric=cockpit_addr,
-                  status=_es(cockpit_reachable)),
-            _Edge("desktop", "xplane", "REST",
-                  metric=xp_addr,
-                  status=_es(xplane_reachable), dashed=True),
+            _Edge("desktop", "cockpitdecks", f"starts · {mode_str}" if not launcher_running else "HTTP",
+                  metric=cockpit_addr if launcher_running else "",
+                  status="ok" if launcher_running else "neutral",
+                  dashed=not launcher_running),
             _Edge("cockpitdecks", "xplane_webapi", "",
                   status=_es(cockpit_reachable)),
             _Edge("xplane_webapi", "xplane", "WebSocket",
@@ -290,49 +283,71 @@ class TopologyTab(QWidget):
         for node in self._nodes:
             self._draw_node(painter, node)
 
-        # Legend (bottom-right)
-        self._draw_legend(painter, W, H)
-
         painter.end()
 
     # ── Layout ────────────────────────────────────────────────────────────
 
     def _layout(self, W: float, H: float) -> None:
-        """Assign (cx, cy) to each node as fractions of canvas size."""
+        """Two-row grid layout.
+
+        Top row (left → right): [Decks] | Cockpitdecks | xplane-webapi | X-Plane
+        Bottom row:             Launcher | Desktop App (directly below Cockpitdecks)
+
+        Anchored from bottom-left so nothing goes off-screen.
+        """
         node_map = {n.key: n for n in self._nodes}
+        PAD      = 32.0
+        NODE_GAP = 64.0   # visible gap between node edges (not centres)
+        ROW_T = H * 0.30
+        ROW_B = H * 0.74
 
-        # Central hub
-        if "cockpitdecks" in node_map:
-            node_map["cockpitdecks"].cx = W * 0.46
-            node_map["cockpitdecks"].cy = H * 0.38
-
-        # xplane-webapi sits between cockpitdecks and X-Plane
-        if "xplane_webapi" in node_map:
-            node_map["xplane_webapi"].cx = W * 0.70
-            node_map["xplane_webapi"].cy = H * 0.30
-
-        # X-Plane in the upper-right corner
-        if "xplane" in node_map:
-            node_map["xplane"].cx = W * 0.87
-            node_map["xplane"].cy = H * 0.20
-
-        # Bottom row: Desktop App and Launcher
-        if "desktop" in node_map:
-            node_map["desktop"].cx = W * 0.50
-            node_map["desktop"].cy = H * 0.75
-
-        if "launcher" in node_map:
-            node_map["launcher"].cx = W * 0.22
-            node_map["launcher"].cy = H * 0.75
-
-        # Left column: deck nodes, vertically centred
         deck_nodes = [n for n in self._nodes
                       if n.key.startswith("deck_") or n.key == "webdecks"]
-        if deck_nodes:
-            deck_x = W * 0.12
-            spacing = 66.0
+        has_decks = bool(deck_nodes)
+
+        desktop_w = node_map["desktop"].W  if "desktop"      in node_map else 150
+        cockpit_w = node_map["cockpitdecks"].W if "cockpitdecks" in node_map else 170
+
+        # ── Desktop sits below Cockpitdecks; anchor from left edge ────────
+        cockpit_cx = PAD + cockpit_w / 2
+        desktop_cx = cockpit_cx
+
+        # ── If decks present, push right so the deck column fits ──────────
+        if has_decks:
+            deck_col_w = max(n.W for n in deck_nodes)
+            min_cockpit_cx = PAD + deck_col_w + NODE_GAP + cockpit_w / 2
+            if min_cockpit_cx > cockpit_cx:
+                shift = min_cockpit_cx - cockpit_cx
+                cockpit_cx += shift
+                desktop_cx += shift
+
+        # ── Top chain: Cockpitdecks → xplane-webapi → X-Plane ────────────
+        chain_keys = ["cockpitdecks", "xplane_webapi", "xplane"]
+        chain_nodes = [node_map[k] for k in chain_keys if k in node_map]
+        chain_end_x = W - PAD - (chain_nodes[-1].W / 2 if chain_nodes else 0)
+
+        if "cockpitdecks" in node_map:
+            node_map["cockpitdecks"].cx = cockpit_cx
+            node_map["cockpitdecks"].cy = ROW_T
+
+        remaining = [node_map[k] for k in ["xplane_webapi", "xplane"] if k in node_map]
+        if remaining:
+            step = (chain_end_x - cockpit_cx) / len(remaining)
+            for i, n in enumerate(remaining):
+                n.cx = cockpit_cx + (i + 1) * step
+                n.cy = ROW_T
+
+        # ── Bottom row: Desktop centred under Cockpitdecks ────────────────
+        if "desktop" in node_map:
+            node_map["desktop"].cx = desktop_cx
+            node_map["desktop"].cy = ROW_B
+
+        # ── Left column: deck nodes, vertically centred beside top row ───
+        if has_decks:
+            deck_x = PAD + max(n.W for n in deck_nodes) / 2
+            spacing = min(70.0, (H - 40) / max(len(deck_nodes), 1))
             total_h = len(deck_nodes) * spacing
-            start_y = (H * 0.42) - total_h / 2 + spacing / 2
+            start_y = ROW_T - total_h / 2 + spacing / 2
             for i, dn in enumerate(deck_nodes):
                 dn.cx = deck_x
                 dn.cy = start_y + i * spacing
@@ -509,34 +524,3 @@ class TopologyTab(QWidget):
             QPointF(base_x - px, base_y - py),
         ]))
 
-    # ── Legend ────────────────────────────────────────────────────────────
-
-    def _draw_legend(self, painter: QPainter, W: float, H: float) -> None:
-        items = [
-            (_OK,    "Connected / OK"),
-            (_WARN,  "Degraded"),
-            (_ERROR, "Unreachable / Error"),
-            (_GRAY,  "Unknown / Not started"),
-        ]
-        lf = QFont()
-        lf.setPointSize(8)
-        painter.setFont(lf)
-        fm = QFontMetrics(lf)
-
-        dot_r = 4.0
-        row_h = fm.height() + 4
-        pad = 10.0
-        x = W - 170
-        y = H - (len(items) * row_h) - pad
-
-        for color, label in items:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(color))
-            painter.drawEllipse(QPointF(x + dot_r, y + row_h / 2), dot_r, dot_r)
-            painter.setPen(QPen(_MUTED))
-            painter.drawText(
-                QRectF(x + dot_r * 2 + 6, y, 150, row_h),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                label,
-            )
-            y += row_h

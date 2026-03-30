@@ -738,10 +738,10 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
-        self.tabs.addTab(self.topology_tab, "Overview")
+        self.tabs.addTab(self.topology_tab, "Topology")
         self.tabs.addTab(tab_decks, "Decks")
-        self.tabs.addTab(self.releases_tab, "Releases")
         self.tabs.addTab(tab_config, "Config")
+        self.tabs.addTab(self.releases_tab, "Releases")
         self.tabs.addTab(tab_diag, "Diagnostics")
         self.tabs.addTab(tab_logs, "Logs")
 
@@ -2040,8 +2040,6 @@ class MainWindow(QMainWindow):
             decks=session.decks_detail if session and session.ok else [],
             dataref_rate=self.metric_dataref_rate.text(),
             ws_rate=self.metric_ws_rate.text(),
-            api_host=settings.get("API_HOST", "127.0.0.1"),
-            api_port=settings.get("API_PORT", "8086"),
             cockpit_web_host=settings.get("COCKPIT_WEB_HOST", "127.0.0.1"),
             cockpit_web_port=settings.get("COCKPIT_WEB_PORT", "7777"),
         )
