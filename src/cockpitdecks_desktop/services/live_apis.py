@@ -116,12 +116,13 @@ def xplane_capabilities_status_line(
 
 @dataclass
 class SessionInfo:
-    """Structured session data from /desktop-status."""
+    """Structured session data from /api/status."""
     version: str
     aircraft: str
     decks: str
     config_path: str
     error: str
+    aircraft_path: str = ""
     decks_detail: list[dict] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -152,6 +153,7 @@ def fetch_session_info(*, base_url: str = "http://127.0.0.1:7777", timeout: floa
         name = (data.get("aircraft_name") or "").strip() or "—"
         dcp = (data.get("deckconfig_path") or "").strip() or "—"
         ver = (data.get("cockpitdecks_version") or "").strip()
+        aircraft_path = (data.get("aircraft_path") or "").strip()
         # Prefer richer decks array; fall back to deck_names list
         decks_detail: list[dict] = []
         if isinstance(data.get("decks"), list):
@@ -161,7 +163,7 @@ def fetch_session_info(*, base_url: str = "http://127.0.0.1:7777", timeout: floa
             deck_part = f"{len(deck_names)} deck(s): {', '.join(str(d) for d in deck_names[:4])}" + ("…" if len(deck_names) > 4 else "")
         else:
             deck_part = "no decks"
-        return SessionInfo(ver, name, deck_part, dcp, "", decks_detail)
+        return SessionInfo(ver, name, deck_part, dcp, "", aircraft_path, decks_detail)
     except HTTPError as exc:
         if exc.code == 404:
             return SessionInfo("", "", "", "", "update Cockpitdecks: /api/status missing")

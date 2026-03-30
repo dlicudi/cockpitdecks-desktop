@@ -420,6 +420,7 @@ class MainWindow(QMainWindow):
         self._prev_dirty_flushes: int | None = None
         self._prev_rate_poll_ts: float | None = None
         self._last_session_info: SessionInfo | None = None
+        self._live_aircraft_path: str = ""
         self._last_metrics_obj: dict | None = None
 
         # Log-analysis state (populated by _parse_log_line)
@@ -1562,7 +1563,8 @@ class MainWindow(QMainWindow):
             if child.widget():
                 child.widget().deleteLater()
 
-        active_path = self._configured_launch_target()
+        # Prefer live aircraft path from /api/status; fall back to configured target
+        active_path = self._live_aircraft_path or self._configured_launch_target()
         if not self._selected_deck_path:
             self._selected_deck_path = active_path
 
@@ -2303,6 +2305,10 @@ class MainWindow(QMainWindow):
     ) -> None:
         self._last_session_info = session_info
         self._last_metrics_obj = metrics_obj
+        live_path = session_info.aircraft_path if session_info.ok else ""
+        if live_path != self._live_aircraft_path:
+            self._live_aircraft_path = live_path
+            self._populate_decks_list()
         self.info_xplane.setText(xplane_line)
         self.info_cockpit_web.setText(cockpit_web_line)
         self.info_session.setText(session_info.one_line())
