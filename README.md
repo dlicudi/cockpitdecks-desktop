@@ -4,6 +4,28 @@
 
 The app orchestrates existing Cockpitdecks pieces. It does not replace the main launcher or duplicate deck runtime logic.
 
+## Screenshots
+
+### Status
+
+![Status](docs/screenshots/status.png)
+
+### Decks: Installed
+
+![Decks Installed](docs/screenshots/decks-installed.png)
+
+### Decks: Packs
+
+![Decks Packs](docs/screenshots/decks-packs.png)
+
+### Releases
+
+![Releases](docs/screenshots/releases.png)
+
+### Topology
+
+![Topology](docs/screenshots/topology.png)
+
 ## What The App Does
 
 - Shows live status for `cockpitdecks`, `xplane-webapi`, and X-Plane connectivity
