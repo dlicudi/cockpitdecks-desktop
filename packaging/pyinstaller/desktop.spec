@@ -20,22 +20,25 @@ if sys.platform == "darwin":
 block_cipher = None
 
 ROOT = Path(os.getcwd()).resolve()
-LAUNCHER_SIDECAR = ROOT / "resources" / "bin" / "cockpitdecks"
 
-ICON_PNG = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.png"
+ICON_PNG  = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.png"
 ICON_ICNS = ROOT / "src" / "cockpitdecks_desktop" / "resources" / "app_icon.icns"
 
 datas = []
-if LAUNCHER_SIDECAR.exists():
-    # Bundle launcher alongside desktop executable resources.
-    datas.append((str(LAUNCHER_SIDECAR), "."))
-else:
-    print(f"[desktop.spec] warning: launcher sidecar not found at {LAUNCHER_SIDECAR}")
-
 if ICON_PNG.exists():
     datas.append((str(ICON_PNG), "cockpitdecks_desktop/resources"))
 else:
     print(f"[desktop.spec] warning: app icon not found at {ICON_PNG}")
+
+# Read version from package at build time
+import importlib.util
+_spec = importlib.util.spec_from_file_location(
+    "cockpitdecks_desktop",
+    str(ROOT / "src" / "cockpitdecks_desktop" / "__init__.py"),
+)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+APP_VERSION = getattr(_mod, "__version__", "0.0.0")
 
 a = Analysis(
     [str(ROOT / "src" / "cockpitdecks_desktop" / "app.py")],
@@ -82,7 +85,7 @@ if sys.platform == "darwin":
         bundle_identifier="com.cockpitdecks.desktop",
         info_plist={
             "CFBundleDisplayName": "Cockpitdecks Desktop",
-            "CFBundleShortVersionString": "0.2.1-beta.7",
+            "CFBundleShortVersionString": APP_VERSION,
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },
