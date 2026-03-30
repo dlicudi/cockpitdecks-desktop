@@ -76,10 +76,14 @@ class _DownloadWorker(QThread):
     log = Signal(str)
     succeeded = Signal()
     failed = Signal(str)
+    cancelled = Signal()
 
     def __init__(self, release: dict) -> None:
         super().__init__()
         self._release = release
+
+    def cancel(self) -> None:
+        self.requestInterruption()
 
     def run(self) -> None:
         try:
@@ -87,8 +91,11 @@ class _DownloadWorker(QThread):
                 self._release,
                 on_progress=lambda done, total: self.progress.emit(done, total),
                 on_log=lambda msg: self.log.emit(msg),
+                should_cancel=self.isInterruptionRequested,
             )
             self.succeeded.emit()
+        except gh.DownloadCancelledError:
+            self.cancelled.emit()
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -139,7 +146,7 @@ class _ReleaseRow(QFrame):
             date_label.setStyleSheet("color: #9ca3af; font-size: 11px; border: none; background: transparent;")
             row.addWidget(date_label)
 
-        if is_latest and not self._is_installed:
+        if is_latest:
             badge = QLabel("Latest")
             badge.setStyleSheet(f"color: #1d4ed8; background: #dbeafe; border: 1px solid #93c5fd; {_BADGE_SS}")
             row.addWidget(badge)
@@ -147,17 +154,20 @@ class _ReleaseRow(QFrame):
         row.addStretch()
 
         # Right side: badge or action button
-        if self._is_installed:
+        if has_asset:
+            self._btn = QPushButton("✓ Installed" if self._is_installed else "Install")
+            self._btn.setStyleSheet(_BTN_SS)
+            if self._is_installed:
+                self._btn.setEnabled(False)
+            else:
+                self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                self._btn.clicked.connect(self._on_install)
+            self._right_widget = self._btn
+            row.addWidget(self._btn)
+        elif self._is_installed:
             self._right_widget = QLabel("✓ Installed")
             self._right_widget.setStyleSheet(f"color: #15803d; background: #dcfce7; border: 1px solid #bbf7d0; {_BADGE_SS}")
             row.addWidget(self._right_widget)
-        elif has_asset:
-            self._btn = QPushButton("Install")
-            self._btn.setStyleSheet(_BTN_SS)
-            self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._btn.clicked.connect(self._on_install)
-            self._right_widget = self._btn
-            row.addWidget(self._btn)
         else:
             no_bin = QLabel("No binary")
             no_bin.setStyleSheet(f"color: #9ca3af; background: transparent; border: none; font-size: 11px;")
@@ -188,6 +198,15 @@ class _ReleaseRow(QFrame):
         self._progress_label.setMinimumWidth(80)
         self._progress_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         pl.addWidget(self._progress_label)
+
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setStyleSheet(
+            "QPushButton { padding: 2px 8px; border-radius: 4px; font-size: 11px; min-height: 0; }"
+            "QPushButton:disabled { color: #a1a6b0; background: #f4f5f7; border-color: #dde0e6; }"
+        )
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+        pl.addWidget(self._cancel_btn)
 
         layout.addWidget(self._progress_row)
 
@@ -243,7 +262,12 @@ class _ReleaseRow(QFrame):
             return
         self._is_installed = False
         self._apply_frame_style()
-        if hasattr(self, "_right_widget") and isinstance(self._right_widget, QLabel):
+        if hasattr(self, "_btn"):
+            self._btn.setText("Install")
+            self._btn.setEnabled(True)
+            self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._btn.clicked.connect(self._on_install)
+        elif hasattr(self, "_right_widget") and isinstance(self._right_widget, QLabel):
             self._right_widget.setText("Previously installed")
             self._right_widget.setStyleSheet(f"color: #9ca3af; background: #f3f4f6; border: 1px solid #e5e7eb; {_BADGE_SS}")
 
@@ -258,13 +282,27 @@ class _ReleaseRow(QFrame):
         self._progress.setValue(0)
         self._progress_row.show()
         self._progress_label.setText("0%")
+        self._cancel_btn.setEnabled(True)
         self._error_label.hide()
 
         self._worker = _DownloadWorker(self._release)
         self._worker.progress.connect(self._on_progress)
         self._worker.succeeded.connect(self._on_success)
         self._worker.failed.connect(self._on_failure)
+        self._worker.cancelled.connect(self._on_cancelled)
         self._worker.start()
+
+    def _on_cancel(self) -> None:
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.setText("Cancelling…")
+        if self._worker:
+            self._worker.cancel()
+
+    def _on_cancelled(self) -> None:
+        self._progress_row.hide()
+        self._cancel_btn.setText("Cancel")
+        self._btn.setText("Install")
+        self._btn.setEnabled(True)
 
     def _on_progress(self, done: int, total: int) -> None:
         if total > 0:
@@ -278,17 +316,13 @@ class _ReleaseRow(QFrame):
         self._progress_row.hide()
         self._is_installed = True
         self._apply_frame_style()
-        # Replace button with Installed badge
-        self._btn.hide()
-        badge = QLabel("✓ Installed")
-        badge.setStyleSheet(f"color: #15803d; background: #dcfce7; border: 1px solid #bbf7d0; {_BADGE_SS}")
-        header_layout = self.layout().itemAt(0).layout()
-        header_layout.addWidget(badge)
-        self._right_widget = badge
+        self._btn.setText("✓ Installed")
+        self._btn.setEnabled(False)
         self.install_requested.emit(self._release)
 
     def _on_failure(self, error: str) -> None:
         self._progress_row.hide()
+        self._cancel_btn.setEnabled(False)
         self._error_label.setText(error)
         self._error_label.show()
         self._btn.setText("Retry")

@@ -55,14 +55,19 @@ def _find_asset(release: dict, suffix: str) -> dict | None:
     return None
 
 
+class DownloadCancelledError(Exception):
+    """Raised when the user cancels a download."""
+
+
 def download_and_install(
     release: dict,
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> None:
     """Download, verify SHA-256, extract, and install the cockpitdecks binary.
 
-    Raises RuntimeError on any failure.
+    Raises RuntimeError on any failure, DownloadCancelledError if cancelled.
     Calls on_progress(bytes_done, total_bytes) and on_log(message) throughout.
     """
     tag = release["tag_name"]
@@ -87,6 +92,8 @@ def download_and_install(
             done = 0
             with open(tarball_path, "wb") as fh:
                 while True:
+                    if should_cancel and should_cancel():
+                        raise DownloadCancelledError()
                     chunk = resp.read(65536)
                     if not chunk:
                         break
