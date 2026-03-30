@@ -589,8 +589,8 @@ class DiagnosticsTab(QWidget):
         # ── Section 1: Health Overview (hero — no card wrapper) ──
         badges_row = QHBoxLayout()
         badges_row.setSpacing(8)
-        self._badge_launcher = _badge("Launcher", "\u2014")
-        self._badge_cockpit = _badge("Cockpitdecks", "\u2014")
+        self._badge_launcher = _badge("Cockpitdecks", "\u2014")
+        self._badge_cockpit = _badge("Cockpitdecks Web", "\u2014")
         self._badge_xplane = _badge("X-Plane", "\u2014")
         for b in (self._badge_launcher, self._badge_cockpit, self._badge_xplane):
             badges_row.addWidget(b, 1)
@@ -715,7 +715,7 @@ class DiagnosticsTab(QWidget):
 
         # ── Group 1: Status ──
         sc.addWidget(_group_label("Status"))
-        row_launcher, self._detail_launcher = _detail_row("Launcher")
+        row_launcher, self._detail_launcher = _detail_row("Cockpitdecks")
         row_exit, self._detail_exit = _detail_row("Exit code")
         row_init, self._detail_init = _detail_row("Init time")
         for r in (row_launcher, row_exit, row_init):
@@ -733,7 +733,7 @@ class DiagnosticsTab(QWidget):
         sc.addWidget(_group_sep())
         sc.addWidget(_group_label("Paths"))
         row_target, self._detail_target = _detail_row("Target")
-        row_log, self._detail_log = _detail_row("Launch log")
+        row_log, self._detail_log = _detail_row("Cockpitdecks log")
         row_crash, self._detail_crash = _detail_row("Crash log")
         for r in (row_target, row_log, row_crash):
             sc.addWidget(r)
@@ -957,11 +957,11 @@ class DiagnosticsTab(QWidget):
         self._detail_exit.setText(exit_code)
 
         if "running" in launcher.lower():
-            self._status_startup.setText("Launcher running")
+            self._status_startup.setText("Cockpitdecks running")
         elif "exited" in launcher.lower():
             self._status_startup.setText(f"Last exit: {exit_code}")
         else:
-            self._status_startup.setText("Launcher idle")
+            self._status_startup.setText("Cockpitdecks idle")
 
     def clear_all(self) -> None:
         """Reset all visuals to empty/neutral state."""

@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
             vl.addWidget(value)
             return item
 
-        conn_layout.addWidget(_status_item(self._dot_launcher, "Launcher", self.info_launcher))
+        conn_layout.addWidget(_status_item(self._dot_launcher, "Cockpitdecks", self.info_launcher))
         conn_layout.addWidget(_status_item(self._dot_xplane, "X-Plane API", self.info_xplane))
         conn_layout.addWidget(_status_item(self._dot_cockpit_web, "Cockpitdecks Web", self.info_cockpit_web))
 
@@ -472,7 +472,7 @@ class MainWindow(QMainWindow):
             preflight_layout.addWidget(row)
             return icon, lbl
 
-        self._pf_launcher_icon, self._pf_launcher_lbl   = _check_row("Launcher binary")
+        self._pf_launcher_icon, self._pf_launcher_lbl   = _check_row("Cockpitdecks binary")
         self._pf_port_icon,     self._pf_port_lbl       = _check_row("Port available")
         self._pf_xplane_icon,   self._pf_xplane_lbl     = _check_row("X-Plane API")
         self._pf_cockpit_icon,  self._pf_cockpit_lbl    = _check_row("Cockpitdecks")
@@ -1813,11 +1813,11 @@ class MainWindow(QMainWindow):
         elif cmd_busy:
             self.btn_start.setToolTip("Disabled while another task is running (e.g. Preflight). Wait for it to finish.")
         elif running:
-            self.btn_start.setToolTip("Launcher was already started from this app. Use Stop, then you can Start again.")
+            self.btn_start.setToolTip("Cockpitdecks was already started from this app. Use Stop, then you can Start again.")
         elif not launcher_ok:
             p = self._resolve_launcher_binary()
             self.btn_start.setToolTip(
-                f"Launcher binary not found:\n{p}\n\n"
+                f"Cockpitdecks binary not found:\n{p}\n\n"
                 f"Set “cockpitdecks path” on the Config tab, build the executable in the cockpitdecks repo, "
                 f"or use a desktop build that bundles it."
             )
@@ -1834,7 +1834,7 @@ class MainWindow(QMainWindow):
         elif cmd_busy:
             self.btn_restart.setToolTip("Disabled while another task is running.")
         elif not launcher_ok:
-            self.btn_restart.setToolTip("Launcher binary not found.")
+            self.btn_restart.setToolTip("Cockpitdecks binary not found.")
         elif port_in_use and not running:
             pid, name = port_listener if port_listener else (0, "?")
             self.btn_restart.setToolTip(f"Port :{wport} in use by pid {pid} ({name}); cannot restart from this app.")
@@ -2428,7 +2428,7 @@ class MainWindow(QMainWindow):
         launcher = self._resolve_launcher_binary()
         _set(self._pf_launcher_icon, self._pf_launcher_lbl,
              launcher.exists(),
-             f"Launcher binary — {'found' if launcher.exists() else 'missing'}")
+             f"Cockpitdecks binary — {'found' if launcher.exists() else 'missing'}")
 
         wport = self._web_listen_port()
         listener = self._cockpit_web_port_listener()

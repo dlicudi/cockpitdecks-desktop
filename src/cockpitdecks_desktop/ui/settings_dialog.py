@@ -87,11 +87,11 @@ class SettingsFormWidget(QWidget):
         root.setContentsMargins(20, 12, 20, 20)
         root.setSpacing(0)
 
-        # ── Section: Launcher ──────────────────────────────────────────
-        root.addWidget(_section_heading("Launcher"))
+        # ── Section: Cockpitdecks ──────────────────────────────────────
+        root.addWidget(_section_heading("Cockpitdecks"))
 
         use_custom = data.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM", "0") == "1"
-        self.chk_launcher_custom = QCheckBox("Use custom launcher")
+        self.chk_launcher_custom = QCheckBox("Use custom cockpitdecks path")
         self.chk_launcher_custom.setChecked(use_custom)
         self.chk_launcher_custom.setStyleSheet("font-size: 11px; font-weight: 600; color: #374151; border: none; margin-top: 6px;")
         root.addWidget(self.chk_launcher_custom)
@@ -103,7 +103,7 @@ class SettingsFormWidget(QWidget):
         self._btn_launcher.setEnabled(use_custom)
         self._btn_launcher.clicked.connect(self._browse_launcher)
         root.addLayout(row_launcher)
-        root.addWidget(_hint("Binary or script to launch Cockpitdecks. Leave empty to use the managed install or bundled binary."))
+        root.addWidget(_hint("Binary or script to run Cockpitdecks. Leave empty to use the managed install or bundled binary."))
 
         self.chk_launcher_custom.toggled.connect(self._on_launcher_custom_toggled)
 
@@ -173,9 +173,9 @@ class SettingsFormWidget(QWidget):
             "Must match the Flask port Cockpitdecks binds to (set in its environ.yaml)."
         ))
 
-        root.addWidget(_field_label("Launch log file"))
+        root.addWidget(_field_label("Cockpitdecks log file"))
         self.ed_launch_log = QLineEdit(data.get("COCKPITDECKS_LAUNCH_LOG_PATH", ""))
-        self.ed_launch_log.setPlaceholderText("Optional — append all launcher output to this file")
+        self.ed_launch_log.setPlaceholderText("Optional — append all cockpitdecks output to this file")
         row_launch_log, btn_launch_log = _browse_row(self.ed_launch_log)
         btn_launch_log.clicked.connect(self._browse_launch_log)
         root.addLayout(row_launch_log)

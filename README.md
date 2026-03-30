@@ -1,8 +1,20 @@
 # cockpitdecks-desktop
 
-`cockpitdecks-desktop` is the Qt desktop companion for [`cockpitdecks`](https://github.com/dlicudi/cockpitdecks). It is meant to make day-to-day setup and operations easier: start and stop the launcher, inspect topology and health, manage aircraft deck packs, and install or switch managed `cockpitdecks` releases.
+`cockpitdecks-desktop` is the Qt desktop companion for [`cockpitdecks`](https://github.com/dlicudi/cockpitdecks). It is meant to make day-to-day setup and operations easier: start and stop `cockpitdecks`, inspect topology and health, manage aircraft deck packs, and install or switch `cockpitdecks` releases.
 
-The app orchestrates existing Cockpitdecks pieces. It does not replace the main launcher or duplicate deck runtime logic.
+The app orchestrates existing Cockpitdecks pieces. It does not replace the main `cockpitdecks` app or duplicate deck runtime logic.
+
+## Download
+
+For most users, downloading `cockpitdecks-desktop` is all you need. From the app, you can download and manage `cockpitdecks` itself and aircraft deck packs.
+
+Prebuilt desktop app releases are published on GitHub:
+
+- [`cockpitdecks-desktop` Releases](https://github.com/dlicudi/cockpitdecks-desktop/releases)
+
+If you need `cockpitdecks` separately, see:
+
+- [`cockpitdecks` Releases](https://github.com/dlicudi/cockpitdecks/releases)
 
 ## Screenshots
 
@@ -35,14 +47,14 @@ The app orchestrates existing Cockpitdecks pieces. It does not replace the main 
 - Browses available deck packs from `cockpitdecks-configs` GitHub releases
 - Installs pack versions into the local configs area
 - Browses `cockpitdecks` GitHub releases
-- Downloads and caches multiple launcher versions locally
-- Lets you switch between cached launcher versions without re-downloading
+- Downloads and caches multiple `cockpitdecks` versions locally
+- Lets you switch between cached `cockpitdecks` versions without re-downloading
 
 ## Main Tabs
 
 ### Status
 
-Operational summary for the local environment: launcher status, current aircraft, connectivity, and recent polling state.
+Operational summary for the local environment: `cockpitdecks` status, current aircraft, connectivity, and recent polling state.
 
 ### Topology
 
@@ -70,7 +82,7 @@ The `Packs` view is version-aware:
 
 ### Releases
 
-Launcher release management for `cockpitdecks` itself.
+Release management for `cockpitdecks` itself.
 
 Current behavior:
 
@@ -81,7 +93,7 @@ Current behavior:
 - the active managed version shows `✓ Active`
 - cached versions can be removed with `Uninstall`
 
-This makes it possible to keep several launcher versions locally and switch between them quickly.
+This makes it possible to keep several `cockpitdecks` versions locally and switch between them quickly.
 
 ### Diagnostics / Logs
 
@@ -117,9 +129,9 @@ scripts/build_desktop.sh
 LAUNCHER_SRC=/path/to/cockpitdecks scripts/build_desktop.sh
 ```
 
-## Managed Launcher Releases
+## Managed `cockpitdecks` Releases
 
-The Releases tab installs managed launcher binaries under the desktop app's install area instead of overwriting one shared binary each time.
+The Releases tab installs managed `cockpitdecks` binaries under the desktop app's install area instead of overwriting one shared binary each time.
 
 That means:
 
@@ -130,15 +142,15 @@ That means:
 
 ## Automated macOS Apple Silicon Release
 
-GitHub Actions can build and publish a macOS arm64 desktop app from this repo, bundling a published launcher binary from the `cockpitdecks` GitHub releases.
+GitHub Actions can build and publish a macOS arm64 desktop app from this repo, bundling a published `cockpitdecks` binary from the `cockpitdecks` GitHub releases.
 
 - Workflow: `.github/workflows/release-desktop-macos-arm64.yml`
-- Launcher manifest: `.github/desktop-macos-arm64.env`
+- Cockpitdecks manifest: `.github/desktop-macos-arm64.env`
 - Trigger: push a tag matching `desktop-v*`
 - Manual trigger: `workflow_dispatch` with required `release_tag` and optional `launcher_tag`
 - Output artifact: `cockpitdecks-desktop-macos-arm64-<tag>.tar.gz`
 
-The workflow downloads `cockpitdecks-macos-arm64-<launcher_tag>.tar.gz` from the configured launcher repository, verifies its SHA-256 checksum, unpacks `cockpitdecks`, bundles it into `Cockpitdecks Desktop.app`, and publishes the desktop artifact plus `build-metadata.json`.
+The workflow downloads `cockpitdecks-macos-arm64-<launcher_tag>.tar.gz` from the configured `cockpitdecks` repository, verifies its SHA-256 checksum, unpacks `cockpitdecks`, bundles it into `Cockpitdecks Desktop.app`, and publishes the desktop artifact plus `build-metadata.json`.
 
 ## App Icon
 
