@@ -49,6 +49,7 @@ If you need `cockpitdecks` separately, see:
 - Browses `cockpitdecks` GitHub releases
 - Downloads and caches multiple `cockpitdecks` versions locally
 - Lets you switch between cached `cockpitdecks` versions without re-downloading
+- Surfaces diagnostics, latency, and runtime pressure to help spot bottlenecks and operational issues
 
 ## Main Tabs
 
@@ -98,6 +99,7 @@ This makes it possible to keep several `cockpitdecks` versions locally and switc
 ### Diagnostics / Logs
 
 Runtime inspection and troubleshooting views for local use when validating startup, connectivity, and runtime behavior.
+They help identify slow event processing, render or flush pressure, queue buildup, and other runtime issues.
 
 ## Development
 
