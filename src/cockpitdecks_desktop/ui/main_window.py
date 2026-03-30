@@ -62,6 +62,7 @@ from cockpitdecks_desktop.ui.app_style import MAIN_WINDOW_QSS
 from cockpitdecks_desktop.ui.deck_packs_tab import DeckPacksTab
 from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
 from cockpitdecks_desktop.ui.topology_tab import TopologyTab
+from cockpitdecks_desktop.ui.devices_tab import DevicesTab
 from cockpitdecks_desktop.ui.releases_tab import ReleasesTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 from cockpitdecks_desktop.ui.sparkline import SparklineWidget
@@ -753,10 +754,13 @@ class MainWindow(QMainWindow):
         self.releases_tab.log_line.connect(self._append)
 
         self.topology_tab = TopologyTab()
+        self.devices_tab = DevicesTab()
+        self.devices_tab.log_line.connect(self._append)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
         self.tabs.addTab(self.topology_tab, "Topology")
+        self.tabs.addTab(self.devices_tab, "Devices")
         self.tabs.addTab(tab_decks, "Decks")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(self.releases_tab, "Releases")
@@ -2010,6 +2014,21 @@ class MainWindow(QMainWindow):
             ckpt_text, _check_ok(self.info_cockpit_web.text()),
             xplane_text, _check_ok(self.info_xplane.text()),
             hw_text, hw_ok,
+        )
+        import socket
+        try:
+            hostname = socket.gethostname()
+            if "." not in hostname and sys.platform == "darwin":
+                hostname += ".local"
+        except Exception:
+            hostname = "127.0.0.1"
+        
+        web_port = self._web_listen_port()
+        base_url = f"http://{hostname}:{web_port}"
+        
+        self.devices_tab.update_decks(
+            self._last_session_info.decks_detail if self._last_session_info else [],
+            base_url=base_url
         )
 
         # ── Runtime pressure ──

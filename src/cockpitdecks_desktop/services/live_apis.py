@@ -278,6 +278,27 @@ def set_target(target: str, *, base_url: str = "http://127.0.0.1:7777", timeout:
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         return False, str(exc)
 
+def reload_deck(deck_name: str, *, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
+    """POST /api/deck/<name>/reload. Returns (ok, message)."""
+    url = f"{base_url.rstrip('/')}/api/deck/{deck_name}/reload"
+    try:
+        req = Request(url, data=b"", headers={"Accept": "application/json"}, method="POST")
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        status = data.get("status", "") if isinstance(data, dict) else ""
+        if status == "ok":
+            return True, f"Deck {deck_name} reloaded"
+        return False, data.get("message", f"Unexpected response: {raw[:120]}")
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False, f"Deck {deck_name} not found or API missing"
+        return False, f"HTTP {exc.code}"
+    except URLError:
+        return False, "Cockpitdecks not running"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return False, str(exc)
+
 
 def cockpitdecks_web_status_line(*, url: str = DEFAULT_COCKPIT_WEB, timeout: float = 1.5) -> tuple[str, str | None]:
     """Cheap check: GET / and discard body (Flask returns HTML)."""
