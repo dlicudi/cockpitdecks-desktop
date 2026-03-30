@@ -14,7 +14,7 @@ import threading
 import time
 import zipfile
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -630,6 +630,7 @@ class MainWindow(QMainWindow):
             "QScrollArea { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }"
         )
         self._deck_grid_area.setWidget(self._deck_grid_container)
+        self._deck_grid_area.viewport().installEventFilter(self)
         installed_layout.addWidget(self._deck_grid_area, 1)
 
         self.decks_summary = QLabel("No targets discovered yet.")
@@ -1580,6 +1581,32 @@ class MainWindow(QMainWindow):
 
         return card
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            hasattr(self, "_deck_grid_area")
+            and watched is self._deck_grid_area.viewport()
+            and event.type() == QEvent.Type.Resize
+        ):
+            QTimer.singleShot(0, self._populate_decks_list)
+        return super().eventFilter(watched, event)
+
+    def _deck_grid_metrics(self) -> tuple[int, int]:
+        max_columns = 4
+        min_card_width = 260
+        viewport_width = max(0, self._deck_grid_area.viewport().width())
+        margins = self._deck_grid_layout.contentsMargins()
+        usable_width = max(0, viewport_width - margins.left() - margins.right())
+        spacing = self._deck_grid_layout.horizontalSpacing()
+        if usable_width <= 0:
+            return 1, min_card_width
+
+        columns = min(max_columns, max(1, (usable_width + spacing) // (min_card_width + spacing)))
+        card_width = max(
+            min_card_width,
+            (usable_width - spacing * (columns - 1)) // columns,
+        )
+        return columns, card_width
+
     def _populate_decks_list(self) -> None:
         if not hasattr(self, "_deck_grid_layout"):
             return
@@ -1588,6 +1615,11 @@ class MainWindow(QMainWindow):
             child = self._deck_grid_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
+        for col in range(4):
+            self._deck_grid_layout.setColumnStretch(col, 0)
+            self._deck_grid_layout.setColumnMinimumWidth(col, 0)
+        for row in range(self._deck_grid_layout.rowCount() + 1):
+            self._deck_grid_layout.setRowStretch(row, 0)
 
         # Prefer live aircraft path from /api/status; fall back to configured target
         active_path = self._live_aircraft_path or self._configured_launch_target()
@@ -1595,10 +1627,11 @@ class MainWindow(QMainWindow):
             self._selected_deck_path = active_path
 
         matching = self._matching_launch_targets()
+        columns, card_width = self._deck_grid_metrics()
 
         grid_row = 0
         for col_idx, info in enumerate(matching):
-            col = col_idx % 4
+            col = col_idx % columns
             if col == 0 and col_idx > 0:
                 grid_row += 1
             widget = self._build_deck_item_widget(
@@ -1606,6 +1639,7 @@ class MainWindow(QMainWindow):
                 is_active=(info.path == active_path),
                 is_selected=(info.path == self._selected_deck_path),
             )
+            widget.setFixedWidth(card_width)
             widget.setCursor(Qt.CursorShape.PointingHandCursor)
             path = info.path
             widget.mousePressEvent = lambda _ev, p=path: self._on_deck_card_clicked(p)
