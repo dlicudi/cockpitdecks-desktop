@@ -281,27 +281,6 @@ class MainWindow(QMainWindow):
 
         ab_layout.addStretch(1)
 
-        # ── Launcher mode toggle (right side of action bar) ──
-        ab_sep3 = QFrame()
-        ab_sep3.setFrameShape(QFrame.Shape.VLine)
-        ab_sep3.setStyleSheet("color: #cbd5e1; max-width: 1px; border: none;")
-        ab_layout.addWidget(ab_sep3)
-
-        mode_container = QWidget()
-        mode_container.setFixedHeight(28)
-        mode_container.setStyleSheet("QWidget { background: #f1f5f9; border-radius: 6px; }")
-        mode_inner = QHBoxLayout(mode_container)
-        mode_inner.setContentsMargins(3, 3, 3, 3)
-        mode_inner.setSpacing(2)
-        self.btn_mode_release = QPushButton("Release")
-        self.btn_mode_dev = QPushButton("Dev")
-        for b in (self.btn_mode_release, self.btn_mode_dev):
-            b.setCheckable(True)
-            b.setFixedHeight(22)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            mode_inner.addWidget(b)
-        ab_layout.addWidget(mode_container)
-
         # ════════════════════════════════════════
         #  CONNECTIVITY CARD (left)
         # ════════════════════════════════════════
@@ -789,11 +768,6 @@ class MainWindow(QMainWindow):
         self.log_line.connect(self._append)
         self.live_poll_done.connect(self._apply_live_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
-
-        # Initialise mode toggle from persisted setting
-        self._apply_mode_toggle_styles()
-        self.btn_mode_release.clicked.connect(lambda: self._set_launcher_mode("release"))
-        self.btn_mode_dev.clicked.connect(lambda: self._set_launcher_mode("dev"))
 
         self.setStyleSheet(MAIN_WINDOW_QSS)
         self.btn_clear_logs.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1686,38 +1660,6 @@ class MainWindow(QMainWindow):
         "QPushButton:hover { color: #1e293b; background: #e2e8f0; }"
     )
 
-    def _apply_mode_toggle_styles(self) -> None:
-        mode = (load_desktop_settings().get("COCKPITDECKS_LAUNCHER_MODE") or "release").lower()
-        is_dev = mode == "dev"
-        self.btn_mode_release.setChecked(not is_dev)
-        self.btn_mode_dev.setChecked(is_dev)
-        active_qss = (
-            "QPushButton { background: #3b82f6; color: #ffffff; font-size: 11px; font-weight: 600;"
-            " border: none; border-radius: 4px; padding: 0 12px; min-height: 0; }"
-        )
-        dev_active_qss = (
-            "QPushButton { background: #f59e0b; color: #ffffff; font-size: 11px; font-weight: 600;"
-            " border: none; border-radius: 4px; padding: 0 12px; min-height: 0; }"
-        )
-        inactive_qss = (
-            "QPushButton { background: transparent; color: #64748b; font-size: 11px; font-weight: 500;"
-            " border: none; border-radius: 4px; padding: 0 12px; min-height: 0; }"
-            "QPushButton:hover { color: #1e293b; background: #e2e8f0; }"
-        )
-        self.btn_mode_release.setStyleSheet(inactive_qss if is_dev else active_qss)
-        self.btn_mode_dev.setStyleSheet(dev_active_qss if is_dev else inactive_qss)
-        self.btn_mode_release.setToolTip("Use the release launcher (managed install or bundled binary)")
-        self.btn_mode_dev.setToolTip("Use the dev launcher path configured in Settings")
-
-    def _set_launcher_mode(self, mode: str) -> None:
-        st = load_desktop_settings()
-        st["COCKPITDECKS_LAUNCHER_MODE"] = mode
-        save_desktop_settings(st)
-        self.settings_form.reload_from_disk()
-        self._apply_mode_toggle_styles()
-        self.refresh_info_panel()
-        self._append(f"[desktop] launcher mode → {mode}")
-
     def _apply_seg_styles(self, active_idx: int) -> None:
         self._decks_seg_installed.setStyleSheet(self._SEG_ACTIVE if active_idx == 0 else self._SEG_INACTIVE)
         self._decks_seg_available.setStyleSheet(self._SEG_ACTIVE if active_idx == 1 else self._SEG_INACTIVE)
@@ -2082,7 +2024,7 @@ class MainWindow(QMainWindow):
         self.topology_tab.update_topology(
             launcher_status=launcher_level,
             launcher_label=launcher_health,
-            launcher_mode=settings.get("COCKPITDECKS_LAUNCHER_MODE", "release"),
+            launcher_custom=settings.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM", "0") == "1",
             launcher_pid=self._launcher_process.pid if self._launcher_is_running() else None,
             cockpit_status=cockpit_level,
             cockpit_label=cockpit_text,

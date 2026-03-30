@@ -114,7 +114,7 @@ class TopologyTab(QWidget):
         *,
         launcher_status: str,
         launcher_label: str,
-        launcher_mode: str = "release",
+        launcher_custom: bool = False,
         launcher_pid: int | None = None,
         cockpit_status: str,
         cockpit_label: str,
@@ -155,7 +155,7 @@ class TopologyTab(QWidget):
 
         # Launcher: show mode and PID when running
         launcher_sub = launcher_label
-        mode_str = "dev" if launcher_mode == "dev" else "release"
+        mode_str = "custom" if launcher_custom else "managed"
         launcher_sub += f" · {mode_str}"
         if launcher_running and launcher_pid is not None:
             launcher_sub += f" · PID {launcher_pid}"

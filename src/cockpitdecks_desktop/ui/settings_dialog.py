@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -89,27 +90,22 @@ class SettingsFormWidget(QWidget):
         # ── Section: Launcher ──────────────────────────────────────────
         root.addWidget(_section_heading("Launcher"))
 
-        root.addWidget(_field_label("Release launcher"))
-        self.ed_launcher = QLineEdit(data.get("COCKPITDECKS_LAUNCHER_PATH", ""))
-        self.ed_launcher.setPlaceholderText("Leave empty to use managed install or bundled binary")
-        row_launcher, btn_launcher = _browse_row(self.ed_launcher)
-        btn_launcher.clicked.connect(self._browse_launcher)
-        root.addLayout(row_launcher)
-        root.addWidget(_hint(
-            "Full path to the cockpitdecks binary for normal use. "
-            "Leave empty to use the version installed via the Releases tab."
-        ))
+        use_custom = data.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM", "0") == "1"
+        self.chk_launcher_custom = QCheckBox("Use custom launcher")
+        self.chk_launcher_custom.setChecked(use_custom)
+        self.chk_launcher_custom.setStyleSheet("font-size: 11px; font-weight: 600; color: #374151; border: none; margin-top: 6px;")
+        root.addWidget(self.chk_launcher_custom)
 
-        root.addWidget(_field_label("Dev launcher"))
-        self.ed_launcher_dev = QLineEdit(data.get("COCKPITDECKS_LAUNCHER_PATH_DEV", ""))
-        self.ed_launcher_dev.setPlaceholderText("e.g. ~/GitHub/cockpitdecks/scripts/cockpitdecks.sh")
-        row_launcher_dev, btn_launcher_dev = _browse_row(self.ed_launcher_dev)
-        btn_launcher_dev.clicked.connect(self._browse_launcher_dev)
-        root.addLayout(row_launcher_dev)
-        root.addWidget(_hint(
-            "Path to your local development script or binary. "
-            "Switch between Release and Dev using the toggle in the action bar."
-        ))
+        self.ed_launcher = QLineEdit(data.get("COCKPITDECKS_LAUNCHER_PATH", ""))
+        self.ed_launcher.setPlaceholderText("e.g. ~/GitHub/cockpitdecks/scripts/cockpitdecks.sh")
+        self.ed_launcher.setEnabled(use_custom)
+        row_launcher, self._btn_launcher = _browse_row(self.ed_launcher)
+        self._btn_launcher.setEnabled(use_custom)
+        self._btn_launcher.clicked.connect(self._browse_launcher)
+        root.addLayout(row_launcher)
+        root.addWidget(_hint("Binary or script to launch Cockpitdecks. Leave empty to use the managed install or bundled binary."))
+
+        self.chk_launcher_custom.toggled.connect(self._on_launcher_custom_toggled)
 
         # ── Section: Aircraft search paths ────────────────────────────
         root.addWidget(_section_heading("Aircraft search paths"))
@@ -194,7 +190,6 @@ class SettingsFormWidget(QWidget):
 
         for ed in (
             self.ed_launcher,
-            self.ed_launcher_dev,
             self.ed_launch_log,
             self.ed_sim_host,
             self.ed_api_host,
@@ -203,6 +198,7 @@ class SettingsFormWidget(QWidget):
             self.ed_web_port,
         ):
             ed.textChanged.connect(self._schedule_save)
+        self.chk_launcher_custom.toggled.connect(self._schedule_save)
 
     # ── Path list helpers ─────────────────────────────────────────────────
 
@@ -226,25 +222,27 @@ class SettingsFormWidget(QWidget):
         desktop_settings.save(self.values())
         self.settings_saved.emit()
 
+    # ── Launcher custom toggle ────────────────────────────────────────────
+
+    def _on_launcher_custom_toggled(self, checked: bool) -> None:
+        self.ed_launcher.setEnabled(checked)
+        self._btn_launcher.setEnabled(checked)
+
     # ── Browse dialogs ────────────────────────────────────────────────────
 
     def _browse_launcher(self) -> None:
+        start = str(Path.home() / "GitHub" / "cockpitdecks" / "scripts")
+        if not Path(start).is_dir():
+            start = str(Path.home() / "GitHub" / "cockpitdecks")
+        if not Path(start).is_dir():
+            start = str(Path.home())
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select release cockpitdecks binary",
-            str(Path.home() / "GitHub" / "cockpitdecks" / "dist"),
-            "cockpitdecks (cockpitdecks cockpitdecks.exe);;All files (*)",
+            self, "Select cockpitdecks binary or script",
+            start,
+            "Shell scripts (*.sh);;Executables (cockpitdecks cockpitdecks.exe);;All files (*)",
         )
         if path:
             self.ed_launcher.setText(path)
-
-    def _browse_launcher_dev(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select dev cockpitdecks script",
-            str(Path.home() / "GitHub" / "cockpitdecks" / "scripts"),
-            "Shell scripts (*.sh);;All files (*)",
-        )
-        if path:
-            self.ed_launcher_dev.setText(path)
 
     def _browse_launch_log(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -282,15 +280,20 @@ class SettingsFormWidget(QWidget):
         """Reload persisted values without triggering a save (e.g. after an external write)."""
         self._save_timer.stop()
         data = desktop_settings.load()
+        use_custom = data.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM", "0") == "1"
+        self.chk_launcher_custom.blockSignals(True)
+        self.chk_launcher_custom.setChecked(use_custom)
+        self.chk_launcher_custom.blockSignals(False)
+        self.ed_launcher.setEnabled(use_custom)
+        self._btn_launcher.setEnabled(use_custom)
         pairs: list[tuple[QLineEdit, str]] = [
-            (self.ed_launcher,     data.get("COCKPITDECKS_LAUNCHER_PATH", "")),
-            (self.ed_launcher_dev, data.get("COCKPITDECKS_LAUNCHER_PATH_DEV", "")),
-            (self.ed_launch_log,   data.get("COCKPITDECKS_LAUNCH_LOG_PATH", "")),
-            (self.ed_sim_host,     data.get("SIMULATOR_HOST", "")),
-            (self.ed_api_host,     data.get("API_HOST", "127.0.0.1")),
-            (self.ed_api_port,     data.get("API_PORT", "8086")),
-            (self.ed_web_host,     data.get("COCKPIT_WEB_HOST", "127.0.0.1")),
-            (self.ed_web_port,     data.get("COCKPIT_WEB_PORT", "7777")),
+            (self.ed_launcher,   data.get("COCKPITDECKS_LAUNCHER_PATH", "")),
+            (self.ed_launch_log, data.get("COCKPITDECKS_LAUNCH_LOG_PATH", "")),
+            (self.ed_sim_host,   data.get("SIMULATOR_HOST", "")),
+            (self.ed_api_host,   data.get("API_HOST", "127.0.0.1")),
+            (self.ed_api_port,   data.get("API_PORT", "8086")),
+            (self.ed_web_host,   data.get("COCKPIT_WEB_HOST", "127.0.0.1")),
+            (self.ed_web_port,   data.get("COCKPIT_WEB_PORT", "7777")),
         ]
         for ed, text in pairs:
             ed.blockSignals(True)
@@ -301,9 +304,9 @@ class SettingsFormWidget(QWidget):
     def values(self) -> dict[str, str]:
         paths = [self.list_cd_path.item(i).text().strip() for i in range(self.list_cd_path.count())]
         return {
-            "COCKPITDECKS_LAUNCHER_PATH":     self.ed_launcher.text().strip(),
-            "COCKPITDECKS_LAUNCHER_PATH_DEV": self.ed_launcher_dev.text().strip(),
-            "COCKPITDECKS_LAUNCH_LOG_PATH":   self.ed_launch_log.text().strip(),
+            "COCKPITDECKS_LAUNCHER_PATH":        self.ed_launcher.text().strip(),
+            "COCKPITDECKS_LAUNCHER_USE_CUSTOM":  "1" if self.chk_launcher_custom.isChecked() else "0",
+            "COCKPITDECKS_LAUNCH_LOG_PATH":      self.ed_launch_log.text().strip(),
             "COCKPITDECKS_PATH":              ":".join(p for p in paths if p),
             "SIMULATOR_HOST":                 self.ed_sim_host.text().strip(),
             "API_HOST":                       self.ed_api_host.text().strip(),

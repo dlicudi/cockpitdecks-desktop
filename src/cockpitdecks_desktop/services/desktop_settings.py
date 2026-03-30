@@ -25,12 +25,10 @@ DEFAULTS: dict[str, str] = {
     "API_PORT": "8086",
     "COCKPIT_WEB_HOST": "127.0.0.1",
     "COCKPIT_WEB_PORT": "7777",
-    # Desktop app only: optional path to release cockpitdecks binary (empty = bundled or managed install).
+    # Desktop app only: optional path to cockpitdecks binary or script.
     "COCKPITDECKS_LAUNCHER_PATH": "",
-    # Desktop app only: optional path to dev cockpitdecks script (e.g. ~/GitHub/cockpitdecks/scripts/cockpitdecks.sh).
-    "COCKPITDECKS_LAUNCHER_PATH_DEV": "",
-    # Desktop app only: active launcher mode — "release" or "dev".
-    "COCKPITDECKS_LAUNCHER_MODE": "release",
+    # Desktop app only: "1" to use the custom launcher path, "0" to use the managed install or bundled binary.
+    "COCKPITDECKS_LAUNCHER_USE_CUSTOM": "0",
     # Desktop app only: optional file to append launcher/Cockpitdecks stdout/stderr.
     "COCKPITDECKS_LAUNCH_LOG_PATH": "",
     # Engine mode log level sent to cockpitdecks (DEBUG, INFO, WARNING, ERROR).
@@ -65,6 +63,14 @@ def load() -> dict[str, str]:
                 for k in DEFAULTS:
                     if k in raw and raw[k] is not None:
                         data[k] = str(raw[k]).strip()
+                # Migration: old COCKPITDECKS_LAUNCHER_MODE ("dev"/"custom") → USE_CUSTOM = "1"
+                old_mode = str(raw.get("COCKPITDECKS_LAUNCHER_MODE") or "").strip().lower()
+                if old_mode in ("dev", "custom"):
+                    data["COCKPITDECKS_LAUNCHER_USE_CUSTOM"] = "1"
+                # Migration: old separate dev path field → unified launcher path
+                old_dev = str(raw.get("COCKPITDECKS_LAUNCHER_PATH_DEV") or "").strip()
+                if old_dev and not data["COCKPITDECKS_LAUNCHER_PATH"]:
+                    data["COCKPITDECKS_LAUNCHER_PATH"] = old_dev
         except (OSError, json.JSONDecodeError):
             pass
     return data
@@ -109,16 +115,14 @@ def cockpit_web_base(values: dict[str, str] | None = None) -> str:
 
 
 def launcher_binary_path(values: dict[str, str] | None = None) -> Path | None:
-    """Active launcher path from settings, respecting the current mode (release/dev).
+    """Active launcher path from settings.
 
     Returns None to signal "use app defaults" (managed install / bundled binary).
     """
     v = values or load()
-    mode = (v.get("COCKPITDECKS_LAUNCHER_MODE") or "release").strip().lower()
-    if mode == "dev":
-        raw = (v.get("COCKPITDECKS_LAUNCHER_PATH_DEV") or "").strip()
-    else:
-        raw = (v.get("COCKPITDECKS_LAUNCHER_PATH") or "").strip()
+    if (v.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM") or "0").strip() != "1":
+        return None
+    raw = (v.get("COCKPITDECKS_LAUNCHER_PATH") or "").strip()
     if not raw:
         return None
     return Path(raw).expanduser()
