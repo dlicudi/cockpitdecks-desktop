@@ -74,7 +74,7 @@ def _format_size(n: int) -> str:
 class _DownloadWorker(QThread):
     progress = Signal(int, int)  # bytes_done, total
     log = Signal(str)
-    succeeded = Signal()
+    succeeded = Signal(str)
     failed = Signal(str)
     cancelled = Signal()
 
@@ -93,7 +93,7 @@ class _DownloadWorker(QThread):
                 on_log=lambda msg: self.log.emit(msg),
                 should_cancel=self.isInterruptionRequested,
             )
-            self.succeeded.emit()
+            self.succeeded.emit(self._release["tag_name"])
         except gh.DownloadCancelledError:
             self.cancelled.emit()
         except Exception as exc:
@@ -102,11 +102,14 @@ class _DownloadWorker(QThread):
 
 class _ReleaseRow(QFrame):
     install_requested = Signal(dict)  # emits the release dict
+    activated_requested = Signal(str)  # tag
+    uninstall_requested = Signal(str)  # tag
 
     def __init__(
         self,
         release: dict,
-        installed_tag: str | None,
+        active_tag: str | None,
+        installed_tags: set[str],
         *,
         is_latest: bool = False,
         parent: QWidget | None = None,
@@ -114,10 +117,12 @@ class _ReleaseRow(QFrame):
         super().__init__(parent)
         self._release = release
         self._worker: _DownloadWorker | None = None
+        self._installing = False
 
         tag = release["tag_name"]
         published = release.get("published_at", "")
-        self._is_installed = tag == installed_tag
+        self._is_active = tag == active_tag
+        self._is_installed = tag in installed_tags
         has_asset = gh.has_binary_asset(release)
 
         self.setObjectName("ReleaseRow")
@@ -153,26 +158,25 @@ class _ReleaseRow(QFrame):
 
         row.addStretch()
 
-        # Right side: badge or action button
-        if has_asset:
-            self._btn = QPushButton("✓ Installed" if self._is_installed else "Install")
-            self._btn.setStyleSheet(_BTN_SS)
-            if self._is_installed:
-                self._btn.setEnabled(False)
-            else:
-                self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                self._btn.clicked.connect(self._on_install)
-            self._right_widget = self._btn
-            row.addWidget(self._btn)
-        elif self._is_installed:
-            self._right_widget = QLabel("✓ Installed")
-            self._right_widget.setStyleSheet(f"color: #15803d; background: #dcfce7; border: 1px solid #bbf7d0; {_BADGE_SS}")
-            row.addWidget(self._right_widget)
-        else:
-            no_bin = QLabel("No binary")
-            no_bin.setStyleSheet(f"color: #9ca3af; background: transparent; border: none; font-size: 11px;")
-            self._right_widget = no_bin
-            row.addWidget(no_bin)
+        self._actions = QHBoxLayout()
+        self._actions.setSpacing(6)
+        self._btn = QPushButton()
+        self._btn.setStyleSheet(_BTN_SS)
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.clicked.connect(self._on_primary_action)
+        self._actions.addWidget(self._btn)
+        self._uninstall_btn = QPushButton("Uninstall")
+        self._uninstall_btn.setStyleSheet(
+            "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
+            " color: #b91c1c; border: 1px solid #fecaca; background: #fff; }"
+            "QPushButton:hover { background: #fef2f2; }"
+            "QPushButton:disabled { color: #a1a6b0; background: #f8fafc; border-color: #e5e7eb; }"
+        )
+        self._uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._uninstall_btn.clicked.connect(self._on_uninstall)
+        self._actions.addWidget(self._uninstall_btn)
+        row.addLayout(self._actions)
+        self._has_asset = has_asset
 
         layout.addLayout(row)
 
@@ -198,15 +202,6 @@ class _ReleaseRow(QFrame):
         self._progress_label.setMinimumWidth(80)
         self._progress_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         pl.addWidget(self._progress_label)
-
-        self._cancel_btn = QPushButton("Cancel")
-        self._cancel_btn.setStyleSheet(
-            "QPushButton { padding: 2px 8px; border-radius: 4px; font-size: 11px; min-height: 0; }"
-            "QPushButton:disabled { color: #a1a6b0; background: #f4f5f7; border-color: #dde0e6; }"
-        )
-        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._cancel_btn.clicked.connect(self._on_cancel)
-        pl.addWidget(self._cancel_btn)
 
         layout.addWidget(self._progress_row)
 
@@ -246,43 +241,75 @@ class _ReleaseRow(QFrame):
             layout.addWidget(self._notes_toggle)
             layout.addWidget(self._notes_label)
 
+        self._refresh_button()
+
     def _apply_frame_style(self) -> None:
-        if self._is_installed:
+        if self._is_active:
             self.setStyleSheet(
                 "#ReleaseRow { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; }"
+            )
+        elif self._is_installed:
+            self.setStyleSheet(
+                "#ReleaseRow { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; }"
             )
         else:
             self.setStyleSheet(
                 "#ReleaseRow { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; }"
             )
 
-    def mark_not_installed(self) -> None:
-        """Called by the parent tab when another release is installed."""
-        if not self._is_installed:
+    def _refresh_button(self) -> None:
+        if self._installing:
+            self._btn.setText("Cancel")
+            self._btn.setEnabled(True)
+            self._uninstall_btn.setVisible(False)
             return
-        self._is_installed = False
-        self._apply_frame_style()
-        if hasattr(self, "_btn"):
+        if self._is_active:
+            self._btn.setText("✓ Active")
+            self._btn.setEnabled(False)
+            self._uninstall_btn.setVisible(True)
+            self._uninstall_btn.setEnabled(True)
+            return
+        if self._is_installed:
+            self._btn.setText("Use Installed")
+            self._btn.setEnabled(True)
+            self._uninstall_btn.setVisible(True)
+            self._uninstall_btn.setEnabled(True)
+            return
+        if self._has_asset:
             self._btn.setText("Install")
             self._btn.setEnabled(True)
-            self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._btn.clicked.connect(self._on_install)
-        elif hasattr(self, "_right_widget") and isinstance(self._right_widget, QLabel):
-            self._right_widget.setText("Previously installed")
-            self._right_widget.setStyleSheet(f"color: #9ca3af; background: #f3f4f6; border: 1px solid #e5e7eb; {_BADGE_SS}")
+            self._uninstall_btn.setVisible(False)
+            return
+        self._btn.setText("No binary")
+        self._btn.setEnabled(False)
+        self._uninstall_btn.setVisible(False)
+
+    def sync_install_state(self, *, active_tag: str | None, installed_tags: set[str]) -> None:
+        tag = self._release["tag_name"]
+        self._is_active = tag == active_tag
+        self._is_installed = tag in installed_tags
+        self._apply_frame_style()
+        self._refresh_button()
 
     def _toggle_notes(self) -> None:
         self._notes_visible = not self._notes_visible
         self._notes_label.setVisible(self._notes_visible)
         self._notes_toggle.setText("▼ Release notes" if self._notes_visible else "▶ Release notes")
 
+    def _on_primary_action(self) -> None:
+        if self._installing:
+            self._on_cancel()
+        elif self._is_installed and not self._is_active:
+            self.activated_requested.emit(self._release["tag_name"])
+        else:
+            self._on_install()
+
     def _on_install(self) -> None:
-        self._btn.setEnabled(False)
-        self._btn.setText("Installing…")
+        self._installing = True
+        self._refresh_button()
         self._progress.setValue(0)
         self._progress_row.show()
         self._progress_label.setText("0%")
-        self._cancel_btn.setEnabled(True)
         self._error_label.hide()
 
         self._worker = _DownloadWorker(self._release)
@@ -293,16 +320,18 @@ class _ReleaseRow(QFrame):
         self._worker.start()
 
     def _on_cancel(self) -> None:
-        self._cancel_btn.setEnabled(False)
-        self._cancel_btn.setText("Cancelling…")
+        self._btn.setText("Cancelling…")
+        self._btn.setEnabled(False)
         if self._worker:
             self._worker.cancel()
 
+    def _on_uninstall(self) -> None:
+        self.uninstall_requested.emit(self._release["tag_name"])
+
     def _on_cancelled(self) -> None:
+        self._installing = False
         self._progress_row.hide()
-        self._cancel_btn.setText("Cancel")
-        self._btn.setText("Install")
-        self._btn.setEnabled(True)
+        self._refresh_button()
 
     def _on_progress(self, done: int, total: int) -> None:
         if total > 0:
@@ -312,21 +341,21 @@ class _ReleaseRow(QFrame):
         else:
             self._progress_label.setText(_format_size(done))
 
-    def _on_success(self) -> None:
+    def _on_success(self, tag: str) -> None:
+        self._installing = False
         self._progress_row.hide()
         self._is_installed = True
+        self._is_active = True
         self._apply_frame_style()
-        self._btn.setText("✓ Installed")
-        self._btn.setEnabled(False)
+        self._refresh_button()
         self.install_requested.emit(self._release)
 
     def _on_failure(self, error: str) -> None:
+        self._installing = False
         self._progress_row.hide()
-        self._cancel_btn.setEnabled(False)
         self._error_label.setText(error)
         self._error_label.show()
-        self._btn.setText("Retry")
-        self._btn.setEnabled(True)
+        self._refresh_button()
 
 
 class ReleasesTab(QWidget):
@@ -401,7 +430,8 @@ class ReleasesTab(QWidget):
 
     def _on_fetch_done(self, releases: list) -> None:
         self._refresh_btn.setEnabled(True)
-        installed = gh.installed_version()
+        active_tag = gh.installed_version()
+        installed_tags = set(gh.installed_versions().keys())
         self._update_installed_label()
 
         # Filter out old launcher-* releases and sort by version descending.
@@ -417,9 +447,11 @@ class ReleasesTab(QWidget):
             if is_latest:
                 latest_tagged = True
                 has_any_asset = True
-            card = _ReleaseRow(release, installed, is_latest=is_latest)
+            card = _ReleaseRow(release, active_tag, installed_tags, is_latest=is_latest)
             card.install_requested.connect(self._on_installed)
             card.install_requested.connect(lambda r: self.log_line.emit(f"[releases] installed {r['tag_name']}"))
+            card.activated_requested.connect(self._on_activated)
+            card.uninstall_requested.connect(self._on_uninstalled)
             self._cards.append(card)
             self._list_layout.insertWidget(self._list_layout.count() - 1, card)
             if gh.has_binary_asset(release):
@@ -438,19 +470,39 @@ class ReleasesTab(QWidget):
         self._fetch_status.setStyleSheet("color: #b91c1c; font-size: 12px;")
 
     def _on_installed(self, release: dict) -> None:
-        tag = release["tag_name"]
-        # Clear "Installed" badge from all other cards
+        active_tag = gh.installed_version()
+        installed_tags = set(gh.installed_versions().keys())
         for card in self._cards:
-            if card._release["tag_name"] != tag:
-                card.mark_not_installed()
+            card.sync_install_state(active_tag=active_tag, installed_tags=installed_tags)
         self._update_installed_label()
+        self.installed.emit(release["tag_name"])
+
+    def _on_activated(self, tag: str) -> None:
+        gh.activate_installed_version(tag)
+        active_tag = gh.installed_version()
+        installed_tags = set(gh.installed_versions().keys())
+        for card in self._cards:
+            card.sync_install_state(active_tag=active_tag, installed_tags=installed_tags)
+        self._update_installed_label()
+        self.log_line.emit(f"[releases] activated installed {tag}")
         self.installed.emit(tag)
+
+    def _on_uninstalled(self, tag: str) -> None:
+        gh.remove_installed_version(tag)
+        active_tag = gh.installed_version()
+        installed_tags = set(gh.installed_versions().keys())
+        for card in self._cards:
+            card.sync_install_state(active_tag=active_tag, installed_tags=installed_tags)
+        self._update_installed_label()
+        self.log_line.emit(f"[releases] removed installed {tag}")
 
     def _update_installed_label(self) -> None:
         ver = gh.installed_version()
         if ver:
             short_path = str(gh.installed_binary()).replace(str(gh.INSTALL_DIR.parent.parent), "~")
-            self._installed_label.setText(f"Installed: {ver}  ·  {short_path}")
+            installed_count = len(gh.installed_versions())
+            suffix = f"  ·  {installed_count} version(s) cached" if installed_count > 1 else ""
+            self._installed_label.setText(f"Active: {ver}  ·  {short_path}{suffix}")
         else:
             self._installed_label.setText("No version installed — select a release below.")
 

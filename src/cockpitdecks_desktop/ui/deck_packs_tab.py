@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -46,6 +47,24 @@ def _has_meaningful_notes(body: str) -> bool:
     return True
 
 
+def _version_sort_key(version: str) -> tuple:
+    version = (version or "").removeprefix("v")
+    parts = version.split("-", 1)
+    base = parts[0]
+    pre = parts[1] if len(parts) > 1 else ""
+    try:
+        base_tuple = tuple(int(x) for x in base.split("."))
+    except ValueError:
+        base_tuple = (0,)
+    if pre:
+        pre_parts = pre.split(".")
+        pre_name = pre_parts[0]
+        pre_num = int(pre_parts[1]) if len(pre_parts) > 1 and pre_parts[1].isdigit() else 0
+        pre_order = {"alpha": 0, "beta": 1, "rc": 2}.get(pre_name, -1)
+        return base_tuple + (0, pre_order, pre_num)
+    return base_tuple + (1, 0, 0)
+
+
 def _pack_sort_key(release: dict) -> tuple:
     """Sort packs alphabetically by name, then newest version first."""
     tag = release.get("tag_name", "")
@@ -56,11 +75,8 @@ def _pack_sort_key(release: dict) -> tuple:
     else:
         pack_name = release.get("name", tag).lower()
         ver_str = "0"
-    try:
-        ver_tuple = tuple(int(x) for x in ver_str.split("."))
-    except ValueError:
-        ver_tuple = (0,)
-    return (pack_name, tuple(-x for x in ver_tuple))
+    ver_key = _version_sort_key(ver_str)
+    return (pack_name, tuple(-x for x in ver_key))
 
 
 def _format_size(n: int) -> str:
@@ -95,12 +111,12 @@ def _installed_pack_versions() -> dict[str, str]:
 
 
 def _pack_id_from_tag(tag: str) -> str:
-    m = re.match(r"^pack-(.+)-v[\d.]+", tag)
+    m = re.match(r"^pack-(.+)-v(.+)$", tag)
     return m.group(1) if m else ""
 
 
 def _pack_version_from_tag(tag: str) -> str:
-    m = re.match(r"^pack-.+-v([\d.]+)$", tag)
+    m = re.match(r"^pack-.+-v(.+)$", tag)
     return m.group(1) if m else ""
 
 
@@ -109,13 +125,27 @@ def _pack_display_name(release: dict) -> str:
     name = release.get("name", "")
     if name:
         # Strip trailing version like "v1.0.1" or "Pack v1.0.1"
-        name = re.sub(r"\s+v?[\d.]+\s*$", "", name).strip()
+        name = re.sub(r"\s+v?[\d.]+(?:-[A-Za-z]+(?:\.\d+)?)?\s*$", "", name).strip()
         # Strip leading "Pack" if redundant
         name = re.sub(r"\s+Pack$", "", name).strip()
         if name:
             return name
     pack_id = _pack_id_from_tag(release.get("tag_name", ""))
     return pack_id.replace("-", " ").title() if pack_id else release.get("tag_name", "Unknown")
+
+
+def _is_prerelease(release: dict) -> bool:
+    return "-" in _pack_version_from_tag(release.get("tag_name", ""))
+
+
+def _release_display_label(release: dict, *, latest_stable: str = "", latest_prerelease: str = "") -> str:
+    version = _pack_version_from_tag(release.get("tag_name", ""))
+    label = f"v{version}" if version else release.get("tag_name", "Unknown")
+    if version and version == latest_stable:
+        return f"Latest stable · {label}"
+    if version and version == latest_prerelease:
+        return f"Latest beta · {label}"
+    return label
 
 
 class _FetchWorker(QThread):
@@ -195,38 +225,33 @@ class _DownloadInstallWorker(QThread):
 
 
 class _PackCard(QFrame):
-    """Card widget for a single pack release — matches installed deck card style."""
+    """Card widget for a single pack with selectable versions."""
     install_requested = Signal(dict)
     uninstall_requested = Signal(str)  # pack_id
 
-    def __init__(self, release: dict, installed_versions: dict[str, str], *, parent: QWidget | None = None) -> None:
+    def __init__(self, pack_id: str, releases: list[dict], installed_versions: dict[str, str], *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._release = release
+        self._pack_id = pack_id
+        self._releases = sorted(
+            releases,
+            key=lambda r: _version_sort_key(_pack_version_from_tag(r.get("tag_name", ""))),
+            reverse=True,
+        )
+        self._release_by_version = {
+            _pack_version_from_tag(release.get("tag_name", "")): release for release in self._releases
+        }
         self._worker: _DownloadInstallWorker | None = None
-
-        tag = release["tag_name"]
-        has_asset = dp.find_zip_asset(release) is not None
-        self._pack_id = _pack_id_from_tag(tag)
-        release_version = _pack_version_from_tag(tag)
-        installed_ver = installed_versions.get(self._pack_id, "")
-        self._is_installed = bool(self._pack_id) and installed_ver == release_version and bool(release_version)
-        # Compare version tuples to distinguish update vs older version.
-        self._is_newer = False
-        self._is_older = False
-        if bool(self._pack_id) and bool(installed_ver) and installed_ver != release_version:
-            try:
-                rel_tuple = tuple(int(x) for x in release_version.split("."))
-                inst_tuple = tuple(int(x) for x in installed_ver.split("."))
-                self._is_newer = rel_tuple > inst_tuple
-                self._is_older = rel_tuple < inst_tuple
-            except ValueError:
-                self._is_newer = True  # fallback: assume newer
+        self._installed_ver = installed_versions.get(self._pack_id, "")
+        self._latest_stable_release = next((r for r in self._releases if not _is_prerelease(r)), None)
+        self._latest_prerelease_release = next((r for r in self._releases if _is_prerelease(r)), None)
+        self._selected_release = (
+            self._release_by_version.get(self._installed_ver)
+            or self._latest_stable_release
+            or self._releases[0]
+        )
 
         # Card style
-        bg = "#f0fdf4" if self._is_installed else "#f8fafc"
-        border = "#bbf7d0" if self._is_installed else "#e2e8f0"
         self.setObjectName("packcard")
-        self.setStyleSheet(f"QFrame#packcard {{ background: {bg}; border: 2px solid {border}; border-radius: 8px; }}")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         cl = QVBoxLayout(self)
@@ -234,88 +259,72 @@ class _PackCard(QFrame):
         cl.setSpacing(3)
 
         # ── Row 1: pack name ──
-        name_lbl = QLabel(_pack_display_name(release))
-        name_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #1e293b;")
-        name_lbl.setWordWrap(True)
-        cl.addWidget(name_lbl)
+        self._name_lbl = QLabel(_pack_display_name(self._releases[0]))
+        self._name_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #1e293b;")
+        self._name_lbl.setWordWrap(True)
+        cl.addWidget(self._name_lbl)
 
         # ── Row 2: version · date · size ──
-        meta_parts: list[str] = []
-        if release_version:
-            meta_parts.append(f"v{release_version}")
-        published = release.get("published_at", "")
-        if published:
-            try:
-                dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
-                meta_parts.append(dt.astimezone(timezone.utc).strftime("%d %b %Y"))
-            except ValueError:
-                pass
-        asset = dp.find_zip_asset(release)
-        if asset and asset.get("size"):
-            meta_parts.append(_format_size(asset["size"]))
-        if meta_parts:
-            meta_lbl = QLabel(" · ".join(meta_parts))
-            meta_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
-            cl.addWidget(meta_lbl)
+        self._meta_lbl = QLabel()
+        self._meta_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
+        cl.addWidget(self._meta_lbl)
 
         # ── Row 3: chips ──
-        chips = QHBoxLayout()
-        chips.setContentsMargins(0, 2, 0, 0)
-        chips.setSpacing(4)
-
-        if self._is_installed:
-            chip = QLabel("Installed")
-            chip.setStyleSheet(
-                "font-size: 9px; font-weight: 600; color: #15803d;"
-                " background: #dcfce7; border-radius: 4px; padding: 1px 5px;"
-            )
-            chips.addWidget(chip)
-        elif self._is_newer:
-            chip = QLabel("Update available")
-            chip.setStyleSheet(
-                "font-size: 9px; font-weight: 600; color: #1d4ed8;"
-                " background: #dbeafe; border-radius: 4px; padding: 1px 5px;"
-            )
-            chips.addWidget(chip)
-        elif self._is_older:
-            chip = QLabel(f"Older · v{installed_ver} installed")
-            chip.setStyleSheet(
-                "font-size: 9px; font-weight: 500; color: #6b7280;"
-                " background: #f1f5f9; border-radius: 4px; padding: 1px 5px;"
-            )
-            chips.addWidget(chip)
-
-        chips.addStretch(1)
-        cl.addLayout(chips)
+        self._chips_row = QHBoxLayout()
+        self._chips_row.setContentsMargins(0, 2, 0, 0)
+        self._chips_row.setSpacing(4)
+        cl.addLayout(self._chips_row)
 
         cl.addStretch(1)
 
-        # ── Bottom: action button + progress ──
+        # ── Bottom: version picker + actions ──
         bottom = QVBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
         bottom.setSpacing(3)
 
+        version_row = QHBoxLayout()
+        version_row.setSpacing(6)
+        self._version_combo = QComboBox()
+        self._version_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._version_combo.setStyleSheet(
+            "QComboBox { padding: 3px 8px; border-radius: 5px; font-size: 11px; min-height: 0;"
+            " background: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; }"
+            "QComboBox::drop-down { border: none; width: 18px; }"
+            "QComboBox QAbstractItemView { background: #ffffff; color: #1e293b;"
+            " selection-background-color: #dbeafe; selection-color: #1e3a8a;"
+            " border: 1px solid #cbd5e1; outline: 0; }"
+        )
+        latest_stable = _pack_version_from_tag(self._latest_stable_release.get("tag_name", "")) if self._latest_stable_release else ""
+        latest_prerelease = _pack_version_from_tag(self._latest_prerelease_release.get("tag_name", "")) if self._latest_prerelease_release else ""
+        for release in self._releases:
+            self._version_combo.addItem(
+                _release_display_label(release, latest_stable=latest_stable, latest_prerelease=latest_prerelease),
+                release,
+            )
+        initial_idx = next((idx for idx, release in enumerate(self._releases) if release is self._selected_release), 0)
+        self._version_combo.setCurrentIndex(initial_idx)
+        self._version_combo.currentIndexChanged.connect(self._on_version_changed)
+        version_row.addWidget(self._version_combo, 1)
+        bottom.addLayout(version_row)
+
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
 
-        if has_asset and not self._is_installed:
-            label = "Update" if self._is_newer else "Install"
-            self._btn = QPushButton(label)
-            self._btn.setStyleSheet(_BTN_SS)
-            self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._btn.clicked.connect(self._on_install)
-            btn_row.addWidget(self._btn)
+        self._btn = QPushButton("Install")
+        self._btn.setStyleSheet(_BTN_SS)
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.clicked.connect(self._on_install)
+        btn_row.addWidget(self._btn)
 
-        if self._is_installed:
-            self._uninstall_btn = QPushButton("Uninstall")
-            self._uninstall_btn.setStyleSheet(
-                "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
-                " color: #b91c1c; border: 1px solid #fecaca; background: #fff; }"
-                "QPushButton:hover { background: #fef2f2; }"
-            )
-            self._uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._uninstall_btn.clicked.connect(self._on_uninstall)
-            btn_row.addWidget(self._uninstall_btn)
+        self._uninstall_btn = QPushButton("Uninstall")
+        self._uninstall_btn.setStyleSheet(
+            "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
+            " color: #b91c1c; border: 1px solid #fecaca; background: #fff; }"
+            "QPushButton:hover { background: #fef2f2; }"
+        )
+        self._uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._uninstall_btn.clicked.connect(self._on_uninstall)
+        btn_row.addWidget(self._uninstall_btn)
 
         btn_row.addStretch()
         bottom.addLayout(btn_row)
@@ -350,32 +359,126 @@ class _PackCard(QFrame):
         cl.addLayout(bottom)
 
         # ── Release notes (collapsed, only if meaningful) ───────
-        body = release.get("body", "").strip()
-        self._has_notes = _has_meaningful_notes(body)
-        if self._has_notes:
-            self._notes_visible = False
-            self._notes_toggle = QPushButton("▶ Release notes")
-            self._notes_toggle.setStyleSheet(
-                "QPushButton { background: transparent; border: none; color: #6b7280; "
-                "font-size: 10px; text-align: left; padding: 2px 0 0 0; min-height: 0; }"
-                "QPushButton:hover { color: #374151; }"
-            )
-            self._notes_toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            self._notes_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._notes_toggle.clicked.connect(self._toggle_notes)
+        self._notes_visible = False
+        self._notes_toggle = QPushButton("▶ Release notes")
+        self._notes_toggle.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #6b7280; "
+            "font-size: 10px; text-align: left; padding: 2px 0 0 0; min-height: 0; }"
+            "QPushButton:hover { color: #374151; }"
+        )
+        self._notes_toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._notes_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._notes_toggle.clicked.connect(self._toggle_notes)
+        self._notes_label = QLabel()
+        self._notes_label.setWordWrap(True)
+        self._notes_label.setStyleSheet(
+            "color: #6b7280; font-size: 10px; padding: 2px 0 0 10px; border: none; background: transparent;"
+        )
+        self._notes_label.hide()
+        cl.addWidget(self._notes_toggle)
+        cl.addWidget(self._notes_label)
 
+        self._refresh_card()
+
+    def _set_card_style(self, *, selected_installed: bool) -> None:
+        bg = "#f0fdf4" if selected_installed else "#f8fafc"
+        border = "#bbf7d0" if selected_installed else "#e2e8f0"
+        self.setStyleSheet(f"QFrame#packcard {{ background: {bg}; border: 2px solid {border}; border-radius: 8px; }}")
+
+    def _selected_version(self) -> str:
+        return _pack_version_from_tag(self._selected_release.get("tag_name", ""))
+
+    def _current_release_has_asset(self) -> bool:
+        return dp.find_zip_asset(self._selected_release) is not None
+
+    def _set_notes_from_release(self) -> None:
+        body = (self._selected_release.get("body") or "").strip()
+        has_notes = _has_meaningful_notes(body)
+        self._notes_toggle.setVisible(has_notes)
+        self._notes_label.setVisible(has_notes and self._notes_visible)
+        if has_notes:
             display_body = re.sub(
                 r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE
             ).strip()
-            self._notes_label = QLabel(display_body[:2000])
-            self._notes_label.setWordWrap(True)
-            self._notes_label.setStyleSheet(
-                "color: #6b7280; font-size: 10px; padding: 2px 0 0 10px; border: none; background: transparent;"
-            )
-            self._notes_label.hide()
+            self._notes_label.setText(display_body[:2000])
+            self._notes_toggle.setText("▼ Release notes" if self._notes_visible else "▶ Release notes")
+        else:
+            self._notes_visible = False
+            self._notes_label.setText("")
 
-            cl.addWidget(self._notes_toggle)
-            cl.addWidget(self._notes_label)
+    def _refresh_card(self) -> None:
+        selected_version = self._selected_version()
+        selected_installed = bool(self._installed_ver) and self._installed_ver == selected_version
+        latest_stable = _pack_version_from_tag(self._latest_stable_release.get("tag_name", "")) if self._latest_stable_release else ""
+        latest_prerelease = _pack_version_from_tag(self._latest_prerelease_release.get("tag_name", "")) if self._latest_prerelease_release else ""
+
+        meta_parts: list[str] = []
+        if selected_version:
+            meta_parts.append(f"v{selected_version}")
+        published = self._selected_release.get("published_at", "")
+        if published:
+            try:
+                dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                meta_parts.append(dt.astimezone(timezone.utc).strftime("%d %b %Y"))
+            except ValueError:
+                pass
+        asset = dp.find_zip_asset(self._selected_release)
+        if asset and asset.get("size"):
+            meta_parts.append(_format_size(asset["size"]))
+        self._meta_lbl.setText(" · ".join(meta_parts))
+        self._meta_lbl.setVisible(bool(meta_parts))
+
+        self._set_card_style(selected_installed=selected_installed)
+
+        while self._chips_row.count():
+            item = self._chips_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        def _add_chip(text: str, style: str) -> None:
+            chip = QLabel(text)
+            chip.setStyleSheet(style)
+            self._chips_row.addWidget(chip)
+
+        if self._installed_ver:
+            _add_chip(
+                f"Installed · v{self._installed_ver}",
+                "font-size: 9px; font-weight: 600; color: #15803d;"
+                " background: #dcfce7; border-radius: 4px; padding: 1px 5px;",
+            )
+        if latest_stable and self._installed_ver != latest_stable:
+            _add_chip(
+                f"Stable · v{latest_stable}",
+                "font-size: 9px; font-weight: 600; color: #1d4ed8;"
+                " background: #dbeafe; border-radius: 4px; padding: 1px 5px;",
+            )
+        if latest_prerelease and self._installed_ver != latest_prerelease:
+            _add_chip(
+                f"Beta · v{latest_prerelease}",
+                "font-size: 9px; font-weight: 500; color: #7c3aed;"
+                " background: #ede9fe; border-radius: 4px; padding: 1px 5px;",
+            )
+        self._chips_row.addStretch(1)
+
+        has_asset = self._current_release_has_asset()
+        self._btn.setVisible(has_asset and not selected_installed)
+        if has_asset and not selected_installed:
+            if self._installed_ver:
+                selected_key = _version_sort_key(selected_version)
+                installed_key = _version_sort_key(self._installed_ver)
+                self._btn.setText("Update" if selected_key > installed_key else "Install")
+            else:
+                self._btn.setText("Install")
+            self._btn.setEnabled(True)
+        self._uninstall_btn.setVisible(bool(self._installed_ver))
+        self._set_notes_from_release()
+
+    def _on_version_changed(self, index: int) -> None:
+        release = self._version_combo.itemData(index)
+        if isinstance(release, dict):
+            self._selected_release = release
+            self._notes_visible = False
+            self._refresh_card()
 
     def _toggle_notes(self) -> None:
         self._notes_visible = not self._notes_visible
@@ -389,7 +492,7 @@ class _PackCard(QFrame):
         self._progress_row.show()
         self._error_label.hide()
 
-        self._worker = _DownloadInstallWorker(self._release)
+        self._worker = _DownloadInstallWorker(self._selected_release)
         self._worker.progress.connect(self._on_progress)
         self._worker.succeeded.connect(self._on_success)
         self._worker.failed.connect(self._on_failure)
@@ -405,11 +508,9 @@ class _PackCard(QFrame):
 
     def _on_success(self, installed_path: str) -> None:
         self._progress_row.hide()
-        self._is_installed = True
-        self.setStyleSheet("QFrame#packcard { background: #f0fdf4; border: 2px solid #bbf7d0; border-radius: 8px; }")
-        if hasattr(self, "_btn"):
-            self._btn.hide()
-        self.install_requested.emit(self._release)
+        self._installed_ver = self._selected_version()
+        self._refresh_card()
+        self.install_requested.emit(self._selected_release)
 
     def _on_failure(self, error: str) -> None:
         self._progress_row.hide()
@@ -424,6 +525,8 @@ class _PackCard(QFrame):
         target = library / self._pack_id
         if target.is_dir():
             shutil.rmtree(target)
+        self._installed_ver = ""
+        self._refresh_card()
         self.uninstall_requested.emit(self._pack_id)
 
 
@@ -435,9 +538,8 @@ class DeckPacksTab(QWidget):
 
     _GRID_COLS = 4
 
-    def __init__(self, show_all_versions: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._show_all_versions = show_all_versions
         self._releases: list[dict] = []
         self._cards: list[_PackCard] = []
         self._fetched = False
@@ -510,65 +612,39 @@ class DeckPacksTab(QWidget):
         releases.sort(key=_pack_sort_key)
         self._releases = releases
 
-        # Filter: Available = latest per pack (skip installed), Archive = older versions only.
-        if self._show_all_versions:
-            # Skip the latest version of each pack — those belong in Available.
-            seen_latest: set[str] = set()
-            display_releases = []
-            for r in releases:
-                pid = _pack_id_from_tag(r["tag_name"])
-                if pid and pid not in seen_latest:
-                    seen_latest.add(pid)
-                    continue  # skip latest
-                display_releases.append(r)
-        else:
-            # Available: show latest per pack, skip packs where latest is already installed.
-            seen_packs: set[str] = set()
-            display_releases = []
-            for r in releases:
-                pid = _pack_id_from_tag(r["tag_name"])
-                if pid and pid not in seen_packs:
-                    seen_packs.add(pid)
-                    ver = _pack_version_from_tag(r["tag_name"])
-                    installed_ver = installed_versions.get(pid, "")
-                    if installed_ver == ver and ver:
-                        continue  # already installed, skip
-                    display_releases.append(r)
-                elif not pid:
-                    display_releases.append(r)
+        grouped_releases: dict[str, list[dict]] = {}
+        for release in releases:
+            pid = _pack_id_from_tag(release["tag_name"])
+            if not pid:
+                continue
+            grouped_releases.setdefault(pid, []).append(release)
 
         self._clear_grid()
         grid_row = 0
-        for idx, release in enumerate(display_releases):
+        display_groups = sorted(
+            grouped_releases.items(),
+            key=lambda item: _pack_display_name(item[1][0]).lower(),
+        )
+        for idx, (pack_id, pack_releases) in enumerate(display_groups):
             col = idx % self._GRID_COLS
             if col == 0 and idx > 0:
                 grid_row += 1
-            card = _PackCard(release, installed_versions)
+            card = _PackCard(pack_id, pack_releases, installed_versions)
             card.install_requested.connect(self._on_installed)
-            card.install_requested.connect(lambda r: self.log_line.emit(f"[packs] installed {r['name']}"))
+            card.install_requested.connect(lambda r: self.log_line.emit(f"[packs] installed {r['tag_name']}"))
             card.uninstall_requested.connect(self._on_uninstalled)
             self._cards.append(card)
             self._grid_layout.addWidget(card, grid_row, col)
         grid_row += 1
         self._grid_layout.setRowStretch(grid_row, 1)
 
-        if not display_releases:
-            if self._show_all_versions:
-                self._fetch_status.setText("No older versions available.")
-            else:
-                self._fetch_status.setText("All packs are up to date.")
+        if not display_groups:
+            self._fetch_status.setText("No packs available.")
             self._summary.setText("")
         else:
             self._fetch_status.setText("")
-            if self._show_all_versions:
-                n_installed = sum(
-                    1 for r in display_releases
-                    if _pack_id_from_tag(r["tag_name"]) in installed_versions
-                    and installed_versions[_pack_id_from_tag(r["tag_name"])] == _pack_version_from_tag(r["tag_name"])
-                )
-                self._summary.setText(f"{len(display_releases)} release(s) · {n_installed} installed")
-            else:
-                self._summary.setText(f"{len(display_releases)} pack(s) available")
+            installed_count = sum(1 for pack_id in grouped_releases if pack_id in installed_versions and installed_versions[pack_id])
+            self._summary.setText(f"{len(display_groups)} pack(s) · {installed_count} installed")
 
     def _on_fetch_error(self, error: str) -> None:
         self._refresh_btn.setEnabled(True)

@@ -552,7 +552,7 @@ class MainWindow(QMainWindow):
         tab_decks_layout.setContentsMargins(12, 12, 12, 12)
         tab_decks_layout.setSpacing(10)
 
-        # ── Segmented toggle: Installed | Available ──
+        # ── Segmented toggle: Installed | Packs ──
         from PySide6.QtWidgets import QButtonGroup
 
         seg_container = QWidget()
@@ -565,9 +565,8 @@ class MainWindow(QMainWindow):
         seg_inner.setSpacing(2)
 
         self._decks_seg_installed = QPushButton("Installed")
-        self._decks_seg_available = QPushButton("Available")
-        self._decks_seg_archive = QPushButton("Archive")
-        for btn in (self._decks_seg_installed, self._decks_seg_available, self._decks_seg_archive):
+        self._decks_seg_packs = QPushButton("Packs")
+        for btn in (self._decks_seg_installed, self._decks_seg_packs):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setCheckable(True)
             btn.setFixedHeight(26)
@@ -577,8 +576,7 @@ class MainWindow(QMainWindow):
         seg_group = QButtonGroup(self)
         seg_group.setExclusive(True)
         seg_group.addButton(self._decks_seg_installed, 0)
-        seg_group.addButton(self._decks_seg_available, 1)
-        seg_group.addButton(self._decks_seg_archive, 2)
+        seg_group.addButton(self._decks_seg_packs, 1)
 
         self._apply_seg_styles(0)
 
@@ -588,7 +586,7 @@ class MainWindow(QMainWindow):
         decks_toggle_row.addStretch(1)
         tab_decks_layout.addLayout(decks_toggle_row)
 
-        # ── Stacked content: page 0 = Installed, page 1 = Available ──
+        # ── Stacked content: page 0 = Installed, page 1 = Packs ──
         from PySide6.QtWidgets import QStackedWidget
 
         self._decks_stack = QStackedWidget()
@@ -640,19 +638,12 @@ class MainWindow(QMainWindow):
 
         self._decks_stack.addWidget(installed_page)  # index 0
 
-        # Page 1: Available packs (latest per pack)
-        self.deck_packs_tab = DeckPacksTab(show_all_versions=False)
+        # Page 1: Packs (one card per aircraft, version picker inside)
+        self.deck_packs_tab = DeckPacksTab()
         self.deck_packs_tab.installed.connect(self._on_pack_installed)
         self.deck_packs_tab.uninstalled.connect(self._on_pack_uninstalled)
         self.deck_packs_tab.log_line.connect(self._append)
         self._decks_stack.addWidget(self.deck_packs_tab)  # index 1
-
-        # Page 2: Archive (all versions)
-        self.deck_packs_archive = DeckPacksTab(show_all_versions=True)
-        self.deck_packs_archive.installed.connect(self._on_pack_installed)
-        self.deck_packs_archive.uninstalled.connect(self._on_pack_uninstalled)
-        self.deck_packs_archive.log_line.connect(self._append)
-        self._decks_stack.addWidget(self.deck_packs_archive)  # index 2
 
         tab_decks_layout.addWidget(self._decks_stack, 1)
 
@@ -1540,23 +1531,39 @@ class MainWindow(QMainWindow):
         chips.addStretch(1)
         cl.addLayout(chips)
 
-        cl.addStretch(1)
-
-        # ── Bottom: layout names ──────────────────────────────────
         if info.layout_infos:
-            names = ", ".join(lid for lid, _ in info.layout_infos[:4])
-            if len(info.layout_infos) > 4:
-                names += "…"
-        elif info.deck_names:
-            names = ", ".join(info.deck_names[:4])
-            if len(info.deck_names) > 4:
-                names += "…"
+            layout_names = [lid for lid, _ in info.layout_infos if lid]
         else:
-            names = ""
-        if names:
-            ll = QLabel(names)
-            ll.setStyleSheet("font-size: 9px; color: #94a3b8;")
-            cl.addWidget(ll)
+            layout_names = [name for name in info.deck_names if name]
+        if layout_names:
+            layouts_wrap = QVBoxLayout()
+            layouts_wrap.setContentsMargins(0, 2, 0, 0)
+            layouts_wrap.setSpacing(4)
+
+            max_visible = 5
+            visible_names = layout_names[:max_visible]
+            hidden_count = max(0, len(layout_names) - max_visible)
+            if hidden_count:
+                visible_names.append(f"+{hidden_count} more")
+
+            row = None
+            for idx, layout_name in enumerate(visible_names):
+                if idx % 3 == 0:
+                    row = QHBoxLayout()
+                    row.setContentsMargins(0, 0, 0, 0)
+                    row.setSpacing(4)
+                    layouts_wrap.addLayout(row)
+                chip = QLabel(layout_name)
+                chip.setStyleSheet(
+                    "font-size: 9px; font-weight: 600; color: #64748b;"
+                    " background: #e2e8f0; border-radius: 4px; padding: 1px 5px;"
+                )
+                row.addWidget(chip)
+            if row is not None:
+                row.addStretch(1)
+            cl.addLayout(layouts_wrap)
+
+        cl.addStretch(1)
 
         # ── Uninstall button (managed decks only) ──────────────────
         if managed and not is_active:
@@ -1683,8 +1690,7 @@ class MainWindow(QMainWindow):
 
     def _apply_seg_styles(self, active_idx: int) -> None:
         self._decks_seg_installed.setStyleSheet(self._SEG_ACTIVE if active_idx == 0 else self._SEG_INACTIVE)
-        self._decks_seg_available.setStyleSheet(self._SEG_ACTIVE if active_idx == 1 else self._SEG_INACTIVE)
-        self._decks_seg_archive.setStyleSheet(self._SEG_ACTIVE if active_idx == 2 else self._SEG_INACTIVE)
+        self._decks_seg_packs.setStyleSheet(self._SEG_ACTIVE if active_idx == 1 else self._SEG_INACTIVE)
 
     def _on_decks_segment_changed(self, idx: int) -> None:
         self._decks_stack.setCurrentIndex(idx)
@@ -1751,7 +1757,6 @@ class MainWindow(QMainWindow):
     def _refresh_pack_views(self) -> None:
         self._refresh_launch_targets()
         self.deck_packs_tab.refresh()
-        self.deck_packs_archive.refresh()
 
     def _command_worker_busy(self) -> bool:
         return self._thread is not None and self._thread.isRunning()

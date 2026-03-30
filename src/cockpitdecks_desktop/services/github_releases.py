@@ -31,6 +31,51 @@ def fetch_releases(repo: str = GITHUB_REPO) -> list[dict]:
         return json.loads(resp.read())
 
 
+def _binary_path_for_tag(tag: str) -> Path:
+    return INSTALL_DIR / f"{BINARY_NAME}-{tag}"
+
+
+def installed_versions() -> dict[str, Path]:
+    """Return {tag: binary_path} for all managed installed versions."""
+    out: dict[str, Path] = {}
+    if not INSTALL_DIR.exists():
+        return out
+    for candidate in INSTALL_DIR.iterdir():
+        if not candidate.is_file():
+            continue
+        if candidate.name.startswith(f"{BINARY_NAME}-"):
+            tag = candidate.name[len(f"{BINARY_NAME}-") :]
+            if tag:
+                out[tag] = candidate
+    active_tag = installed_version()
+    legacy_binary = INSTALL_DIR / BINARY_NAME
+    if active_tag and legacy_binary.exists() and active_tag not in out:
+        out[active_tag] = legacy_binary
+    return out
+
+
+def activate_installed_version(tag: str) -> Path:
+    """Mark an already-downloaded managed version as the active launcher binary."""
+    versions = installed_versions()
+    path = versions.get(tag)
+    if path is None or not path.exists():
+        raise RuntimeError(f"installed version not found: {tag}")
+    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    VERSION_FILE.write_text(tag + "\n")
+    return path
+
+
+def remove_installed_version(tag: str) -> None:
+    """Remove one cached managed version."""
+    path = installed_versions().get(tag)
+    if path is None or not path.exists():
+        raise RuntimeError(f"installed version not found: {tag}")
+    path.unlink()
+    if installed_version() == tag:
+        if VERSION_FILE.exists():
+            VERSION_FILE.unlink()
+
+
 def installed_version() -> str | None:
     """Return the installed version tag, or None if not installed."""
     if VERSION_FILE.exists():
@@ -39,6 +84,11 @@ def installed_version() -> str | None:
 
 
 def installed_binary() -> Path:
+    tag = installed_version()
+    if tag:
+        versioned = _binary_path_for_tag(tag)
+        if versioned.exists():
+            return versioned
     return INSTALL_DIR / BINARY_NAME
 
 
@@ -64,7 +114,7 @@ def download_and_install(
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
-) -> None:
+) -> Path:
     """Download, verify SHA-256, extract, and install the cockpitdecks binary.
 
     Raises RuntimeError on any failure, DownloadCancelledError if cancelled.
@@ -133,9 +183,10 @@ def download_and_install(
                 raise RuntimeError("Failed to extract binary from tarball")
 
             INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-            binary_path = INSTALL_DIR / BINARY_NAME
+            binary_path = _binary_path_for_tag(tag)
             binary_path.write_bytes(extracted.read())
             binary_path.chmod(0o755)
 
         VERSION_FILE.write_text(tag + "\n")
-        log(f"[releases] installed {tag} → {INSTALL_DIR / BINARY_NAME}")
+        log(f"[releases] installed {tag} → {binary_path}")
+        return binary_path
