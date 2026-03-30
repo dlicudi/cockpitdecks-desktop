@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 DEFAULT_XPLANE_BASE = "http://127.0.0.1:8086"
@@ -280,7 +281,8 @@ def set_target(target: str, *, base_url: str = "http://127.0.0.1:7777", timeout:
 
 def reload_deck(deck_name: str, *, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
     """POST /api/deck/<name>/reload. Returns (ok, message)."""
-    url = f"{base_url.rstrip('/')}/api/deck/{deck_name}/reload"
+    encoded_deck_name = quote(deck_name, safe="")
+    url = f"{base_url.rstrip('/')}/api/deck/{encoded_deck_name}/reload"
     try:
         req = Request(url, data=b"", headers={"Accept": "application/json"}, method="POST")
         with urlopen(req, timeout=timeout) as resp:
