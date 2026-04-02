@@ -156,6 +156,31 @@ def _release_display_label(release: dict, *, latest_stable: str = "", latest_pre
     return label
 
 
+class _TextDialog(QDialog):
+    """Simple dialog showing plain or markdown text."""
+
+    def __init__(self, title: str, content: str, *, markdown: bool = False, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(700, 540)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self._text = QTextEdit()
+        self._text.setReadOnly(True)
+        self._text.setStyleSheet("font-size: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px;")
+        if markdown:
+            self._text.setMarkdown(content)
+        else:
+            self._text.setPlainText(content)
+        layout.addWidget(self._text, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+
 class _ReadmeFetchWorker(QThread):
     succeeded = Signal(str)
     failed = Signal(str)
@@ -172,45 +197,30 @@ class _ReadmeFetchWorker(QThread):
             self.failed.emit(str(exc))
 
 
-class _ReadmeDialog(QDialog):
+class _ReadmeDialog(_TextDialog):
     """Dialog that shows a pack README, reading from disk or fetching from GitHub."""
 
     def __init__(self, pack_id: str, pack_dir: Path | None = None, *, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(f"README — {pack_id}")
-        self.resize(700, 540)
-        self._worker: _ReadmeFetchWorker | None = None
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-
-        self._text = QTextEdit()
-        self._text.setReadOnly(True)
-        self._text.setStyleSheet("font-size: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px;")
-        layout.addWidget(self._text, 1)
-
-        self._status = QLabel()
-        self._status.setStyleSheet("color: #64748b; font-size: 11px;")
-        layout.addWidget(self._status)
-
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
-
+        content = ""
         if pack_dir is not None:
             readme = pack_dir / "README.md"
             if readme.is_file():
                 try:
-                    self._text.setMarkdown(readme.read_text(encoding="utf-8"))
-                    return
+                    content = readme.read_text(encoding="utf-8")
                 except OSError:
                     pass
 
-        self._status.setText("Fetching README from GitHub…")
-        self._worker = _ReadmeFetchWorker(pack_id)
-        self._worker.succeeded.connect(self._on_fetched)
-        self._worker.failed.connect(self._on_fetch_failed)
-        self._worker.start()
+        super().__init__(f"README — {pack_id}", content, markdown=True, parent=parent)
+        self._worker: _ReadmeFetchWorker | None = None
+
+        if not content:
+            self._status = QLabel("Fetching README from GitHub…")
+            self._status.setStyleSheet("color: #64748b; font-size: 11px;")
+            self.layout().insertWidget(1, self._status)
+            self._worker = _ReadmeFetchWorker(pack_id)
+            self._worker.succeeded.connect(self._on_fetched)
+            self._worker.failed.connect(self._on_fetch_failed)
+            self._worker.start()
 
     def _on_fetched(self, content: str) -> None:
         self._text.setMarkdown(content)
@@ -432,6 +442,17 @@ class _PackCard(QFrame):
         self._readme_btn.clicked.connect(self._on_readme)
         btn_row.addWidget(self._readme_btn)
 
+        self._notes_btn = QPushButton("Notes")
+        self._notes_btn.setStyleSheet(
+            "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
+            " color: #6b7280; border: 1px solid #e5e7eb; background: #fff; }"
+            "QPushButton:hover { background: #f9fafb; }"
+        )
+        self._notes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._notes_btn.clicked.connect(self._on_notes)
+        self._notes_btn.hide()
+        btn_row.addWidget(self._notes_btn)
+
         btn_row.addStretch()
         bottom.addLayout(btn_row)
 
@@ -464,26 +485,6 @@ class _PackCard(QFrame):
 
         cl.addLayout(bottom)
 
-        # ── Release notes (collapsed, only if meaningful) ───────
-        self._notes_visible = False
-        self._notes_toggle = QPushButton("▶ Release notes")
-        self._notes_toggle.setStyleSheet(
-            "QPushButton { background: transparent; border: none; color: #6b7280; "
-            "font-size: 10px; text-align: left; padding: 2px 0 0 0; min-height: 0; }"
-            "QPushButton:hover { color: #374151; }"
-        )
-        self._notes_toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._notes_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._notes_toggle.clicked.connect(self._toggle_notes)
-        self._notes_label = QLabel()
-        self._notes_label.setWordWrap(True)
-        self._notes_label.setStyleSheet(
-            "color: #6b7280; font-size: 10px; padding: 2px 0 0 10px; border: none; background: transparent;"
-        )
-        self._notes_label.hide()
-        cl.addWidget(self._notes_toggle)
-        cl.addWidget(self._notes_label)
-
         self._refresh_card()
 
     def _set_card_style(self, *, selected_installed: bool) -> None:
@@ -497,20 +498,14 @@ class _PackCard(QFrame):
     def _current_release_has_asset(self) -> bool:
         return dp.find_zip_asset(self._selected_release) is not None
 
-    def _set_notes_from_release(self) -> None:
+    def _release_notes_body(self) -> str:
         body = (self._selected_release.get("body") or "").strip()
-        has_notes = _has_meaningful_notes(body)
-        self._notes_toggle.setVisible(has_notes)
-        self._notes_label.setVisible(has_notes and self._notes_visible)
-        if has_notes:
-            display_body = re.sub(
-                r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE
-            ).strip()
-            self._notes_label.setText(display_body[:2000])
-            self._notes_toggle.setText("▼ Release notes" if self._notes_visible else "▶ Release notes")
-        else:
-            self._notes_visible = False
-            self._notes_label.setText("")
+        return re.sub(
+            r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE
+        ).strip()
+
+    def _set_notes_from_release(self) -> None:
+        self._notes_btn.setVisible(_has_meaningful_notes(self._release_notes_body()))
 
     def _refresh_card(self) -> None:
         selected_version = self._selected_version()
@@ -599,13 +594,14 @@ class _PackCard(QFrame):
         release = self._version_combo.itemData(index)
         if isinstance(release, dict):
             self._selected_release = release
-            self._notes_visible = False
             self._refresh_card()
 
-    def _toggle_notes(self) -> None:
-        self._notes_visible = not self._notes_visible
-        self._notes_label.setVisible(self._notes_visible)
-        self._notes_toggle.setText("▼ Release notes" if self._notes_visible else "▶ Release notes")
+    def _on_notes(self) -> None:
+        body = self._release_notes_body()
+        version = self._selected_version()
+        title = f"Release notes — {_pack_display_name(self._releases[0])} v{version}"
+        dlg = _TextDialog(title, body, parent=self)
+        dlg.exec()
 
     def _on_install(self) -> None:
         self._btn.setEnabled(False)
