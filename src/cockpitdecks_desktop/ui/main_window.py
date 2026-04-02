@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self._live_poll_lock = threading.Lock()
         self._launch_targets: list[LaunchTargetInfo] = []
         self._last_launcher_exit_code: int | None = None
+        self._cached_listener: tuple[int, str] | None = None
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -1990,7 +1991,7 @@ class MainWindow(QMainWindow):
         crash_log = self._crash_log_path()
         target = self._selected_launch_target()
         launcher_running = self._launcher_is_running()
-        listener = self._cockpit_web_port_listener()
+        listener = self._cached_listener
         web_base = cockpit_web_base(settings)
         xp_base = xplane_rest_base(settings)
 
@@ -2328,7 +2329,7 @@ class MainWindow(QMainWindow):
         if launcher.exists():
             running = self._launcher_is_running()
             launcher_status = "Running" if running else "Ready"
-            listener = self._cockpit_web_port_listener()
+            listener = self._cached_listener
             if listener is not None:
                 tip_lines.append(f"Listener on port {wport}: pid {listener[0]} ({listener[1]})")
                 self.info_launcher.setText(
@@ -2362,6 +2363,7 @@ class MainWindow(QMainWindow):
                 session_info = fetch_session_info(base_url=web_base)
                 metrics_line = cockpitdecks_metrics_status_line(base_url=web_base)
                 metrics_obj, _ = cockpitdecks_metrics_json(base_url=web_base)
+                self._cached_listener = self._cockpit_web_port_listener()
                 ts = datetime.now().strftime("%H:%M:%S")
                 self.live_poll_done.emit(xp_line, web_line, session_info, metrics_line, ts, metrics_obj)
             finally:
