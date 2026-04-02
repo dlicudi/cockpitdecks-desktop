@@ -17,6 +17,14 @@ _API_HEADERS = {
 }
 
 
+def fetch_readme(pack_id: str, repo: str = GITHUB_REPO) -> str:
+    """Fetch README.md for a pack from GitHub raw content. Raises on failure."""
+    url = f"https://raw.githubusercontent.com/{repo}/main/decks/{pack_id}/README.md"
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.read().decode("utf-8")
+
+
 def fetch_pack_releases(repo: str = GITHUB_REPO) -> list[dict]:
     """Fetch all releases from the cockpitdecks-configs GitHub repo."""
     url = f"{_API_BASE}/repos/{repo}/releases"

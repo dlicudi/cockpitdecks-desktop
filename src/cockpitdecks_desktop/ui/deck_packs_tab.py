@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -87,26 +89,30 @@ def _format_size(n: int) -> str:
     return f"{n} B"
 
 
-def _installed_pack_versions() -> dict[str, str]:
-    """Return {pack_id: version} for packs in the managed decks library."""
+_MANIFEST_KEYS = ("version", "summary", "aircraft", "icao")
+
+
+def _installed_pack_info() -> dict[str, dict]:
+    """Return {pack_id: {version, summary, aircraft, icao}} for installed packs."""
     library = managed_decks_dir()
     if not library.is_dir():
         return {}
-    result: dict[str, str] = {}
+    result: dict[str, dict] = {}
     for d in library.iterdir():
         if not d.is_dir() or d.name.startswith("."):
             continue
         manifest = d / "manifest.yaml"
-        version = ""
+        info: dict = {k: "" for k in _MANIFEST_KEYS}
         if manifest.is_file():
             try:
                 for line in manifest.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("version:"):
-                        version = line.split(":", 1)[1].strip().strip("'\"")
-                        break
+                    for key in _MANIFEST_KEYS:
+                        if line.startswith(f"{key}:"):
+                            info[key] = line.split(":", 1)[1].strip().strip("'\"")
+                            break
             except OSError:
                 pass
-        result[d.name] = version
+        result[d.name] = info
     return result
 
 
@@ -146,6 +152,70 @@ def _release_display_label(release: dict, *, latest_stable: str = "", latest_pre
     if version and version == latest_prerelease:
         return f"Latest beta · {label}"
     return label
+
+
+class _ReadmeFetchWorker(QThread):
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, pack_id: str) -> None:
+        super().__init__()
+        self._pack_id = pack_id
+
+    def run(self) -> None:
+        try:
+            content = dp.fetch_readme(self._pack_id)
+            self.succeeded.emit(content)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class _ReadmeDialog(QDialog):
+    """Dialog that shows a pack README, reading from disk or fetching from GitHub."""
+
+    def __init__(self, pack_id: str, pack_dir: Path | None = None, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"README — {pack_id}")
+        self.resize(700, 540)
+        self._worker: _ReadmeFetchWorker | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self._text = QTextEdit()
+        self._text.setReadOnly(True)
+        self._text.setStyleSheet("font-size: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px;")
+        layout.addWidget(self._text, 1)
+
+        self._status = QLabel()
+        self._status.setStyleSheet("color: #64748b; font-size: 11px;")
+        layout.addWidget(self._status)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+        if pack_dir is not None:
+            readme = pack_dir / "README.md"
+            if readme.is_file():
+                try:
+                    self._text.setMarkdown(readme.read_text(encoding="utf-8"))
+                    return
+                except OSError:
+                    pass
+
+        self._status.setText("Fetching README from GitHub…")
+        self._worker = _ReadmeFetchWorker(pack_id)
+        self._worker.succeeded.connect(self._on_fetched)
+        self._worker.failed.connect(self._on_fetch_failed)
+        self._worker.start()
+
+    def _on_fetched(self, content: str) -> None:
+        self._text.setMarkdown(content)
+        self._status.hide()
+
+    def _on_fetch_failed(self, error: str) -> None:
+        self._status.setText(f"Could not fetch README: {error}")
 
 
 class _FetchWorker(QThread):
@@ -229,7 +299,7 @@ class _PackCard(QFrame):
     install_requested = Signal(dict)
     uninstall_requested = Signal(str)  # pack_id
 
-    def __init__(self, pack_id: str, releases: list[dict], installed_versions: dict[str, str], *, parent: QWidget | None = None) -> None:
+    def __init__(self, pack_id: str, releases: list[dict], installed_info: dict[str, dict], *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._pack_id = pack_id
         self._releases = sorted(
@@ -241,7 +311,11 @@ class _PackCard(QFrame):
             _pack_version_from_tag(release.get("tag_name", "")): release for release in self._releases
         }
         self._worker: _DownloadInstallWorker | None = None
-        self._installed_ver = installed_versions.get(self._pack_id, "")
+        _info = installed_info.get(self._pack_id, {})
+        self._installed_ver: str = _info.get("version", "")
+        self._installed_summary: str = _info.get("summary", "")
+        self._installed_aircraft: str = _info.get("aircraft", "")
+        self._installed_icao: str = _info.get("icao", "")
         self._latest_stable_release = next((r for r in self._releases if not _is_prerelease(r)), None)
         self._latest_prerelease_release = next((r for r in self._releases if _is_prerelease(r)), None)
         self._selected_release = (
@@ -263,6 +337,20 @@ class _PackCard(QFrame):
         self._name_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #1e293b;")
         self._name_lbl.setWordWrap(True)
         cl.addWidget(self._name_lbl)
+
+        # ── Row 1b: aircraft (shown when installed) ──
+        self._aircraft_lbl = QLabel()
+        self._aircraft_lbl.setStyleSheet("font-size: 10px; color: #475569;")
+        self._aircraft_lbl.setWordWrap(True)
+        self._aircraft_lbl.hide()
+        cl.addWidget(self._aircraft_lbl)
+
+        # ── Row 1c: summary (shown when installed) ──
+        self._summary_lbl = QLabel()
+        self._summary_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
+        self._summary_lbl.setWordWrap(True)
+        self._summary_lbl.hide()
+        cl.addWidget(self._summary_lbl)
 
         # ── Row 2: version · date · size ──
         self._meta_lbl = QLabel()
@@ -325,6 +413,16 @@ class _PackCard(QFrame):
         self._uninstall_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._uninstall_btn.clicked.connect(self._on_uninstall)
         btn_row.addWidget(self._uninstall_btn)
+
+        self._readme_btn = QPushButton("README")
+        self._readme_btn.setStyleSheet(
+            "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
+            " color: #0369a1; border: 1px solid #bae6fd; background: #fff; }"
+            "QPushButton:hover { background: #f0f9ff; }"
+        )
+        self._readme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._readme_btn.clicked.connect(self._on_readme)
+        btn_row.addWidget(self._readme_btn)
 
         btn_row.addStretch()
         bottom.addLayout(btn_row)
@@ -411,6 +509,18 @@ class _PackCard(QFrame):
         selected_installed = bool(self._installed_ver) and self._installed_ver == selected_version
         latest_stable = _pack_version_from_tag(self._latest_stable_release.get("tag_name", "")) if self._latest_stable_release else ""
         latest_prerelease = _pack_version_from_tag(self._latest_prerelease_release.get("tag_name", "")) if self._latest_prerelease_release else ""
+
+        if self._installed_aircraft:
+            self._aircraft_lbl.setText(self._installed_aircraft)
+            self._aircraft_lbl.show()
+        else:
+            self._aircraft_lbl.hide()
+
+        if self._installed_summary:
+            self._summary_lbl.setText(self._installed_summary)
+            self._summary_lbl.show()
+        else:
+            self._summary_lbl.hide()
 
         meta_parts: list[str] = []
         if selected_version:
@@ -506,9 +616,20 @@ class _PackCard(QFrame):
         else:
             self._progress_label.setText(_format_size(done))
 
+    def _on_readme(self) -> None:
+        library = managed_decks_dir()
+        pack_dir = library / self._pack_id if self._installed_ver else None
+        dlg = _ReadmeDialog(self._pack_id, pack_dir, parent=self)
+        dlg.exec()
+
     def _on_success(self, installed_path: str) -> None:
         self._progress_row.hide()
         self._installed_ver = self._selected_version()
+        # Re-read manifest to pick up summary/aircraft/icao
+        info = _installed_pack_info().get(self._pack_id, {})
+        self._installed_summary = info.get("summary", "")
+        self._installed_aircraft = info.get("aircraft", "")
+        self._installed_icao = info.get("icao", "")
         self._refresh_card()
         self.install_requested.emit(self._selected_release)
 
@@ -526,6 +647,9 @@ class _PackCard(QFrame):
         if target.is_dir():
             shutil.rmtree(target)
         self._installed_ver = ""
+        self._installed_summary = ""
+        self._installed_aircraft = ""
+        self._installed_icao = ""
         self._refresh_card()
         self.uninstall_requested.emit(self._pack_id)
 
@@ -606,7 +730,7 @@ class DeckPacksTab(QWidget):
 
     def _on_fetch_done(self, releases: list) -> None:
         self._refresh_btn.setEnabled(True)
-        installed_versions = _installed_pack_versions()
+        installed_info = _installed_pack_info()
 
         releases = [r for r in releases if r.get("tag_name", "").startswith("pack-")]
         releases.sort(key=_pack_sort_key)
@@ -629,7 +753,7 @@ class DeckPacksTab(QWidget):
             col = idx % self._GRID_COLS
             if col == 0 and idx > 0:
                 grid_row += 1
-            card = _PackCard(pack_id, pack_releases, installed_versions)
+            card = _PackCard(pack_id, pack_releases, installed_info)
             card.install_requested.connect(self._on_installed)
             card.install_requested.connect(lambda r: self.log_line.emit(f"[packs] installed {r['tag_name']}"))
             card.uninstall_requested.connect(self._on_uninstalled)
@@ -643,7 +767,7 @@ class DeckPacksTab(QWidget):
             self._summary.setText("")
         else:
             self._fetch_status.setText("")
-            installed_count = sum(1 for pack_id in grouped_releases if pack_id in installed_versions and installed_versions[pack_id])
+            installed_count = sum(1 for pack_id in grouped_releases if installed_info.get(pack_id, {}).get("version"))
             self._summary.setText(f"{len(display_groups)} pack(s) · {installed_count} installed")
 
     def _on_fetch_error(self, error: str) -> None:
