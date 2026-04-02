@@ -146,11 +146,13 @@ def _is_prerelease(release: dict) -> bool:
 
 def _release_display_label(release: dict, *, latest_stable: str = "", latest_prerelease: str = "") -> str:
     version = _pack_version_from_tag(release.get("tag_name", ""))
-    label = f"v{version}" if version else release.get("tag_name", "Unknown")
-    if version and version == latest_stable:
-        return f"Latest stable · {label}"
-    if version and version == latest_prerelease:
-        return f"Latest beta · {label}"
+    if not version:
+        return release.get("tag_name", "Unknown")
+    label = f"v{version}"
+    if version == latest_stable:
+        return f"{label}  —  latest"
+    if version == latest_prerelease:
+        return f"{label}  —  beta"
     return label
 
 
@@ -318,10 +320,16 @@ class _PackCard(QFrame):
         self._installed_icao: str = _info.get("icao", "")
         self._latest_stable_release = next((r for r in self._releases if not _is_prerelease(r)), None)
         self._latest_prerelease_release = next((r for r in self._releases if _is_prerelease(r)), None)
+        _latest_stable_ver = _pack_version_from_tag(self._latest_stable_release.get("tag_name", "")) if self._latest_stable_release else ""
+        _update_available = (
+            bool(self._installed_ver)
+            and bool(_latest_stable_ver)
+            and _version_sort_key(_latest_stable_ver) > _version_sort_key(self._installed_ver)
+        )
         self._selected_release = (
-            self._release_by_version.get(self._installed_ver)
-            or self._latest_stable_release
-            or self._releases[0]
+            self._latest_stable_release
+            if _update_available
+            else (self._release_by_version.get(self._installed_ver) or self._latest_stable_release or self._releases[0])
         )
 
         # Card style
@@ -523,8 +531,6 @@ class _PackCard(QFrame):
             self._summary_lbl.hide()
 
         meta_parts: list[str] = []
-        if selected_version:
-            meta_parts.append(f"v{selected_version}")
         published = self._selected_release.get("published_at", "")
         if published:
             try:
@@ -551,23 +557,24 @@ class _PackCard(QFrame):
             self._chips_row.addWidget(chip)
 
         if self._installed_ver:
-            _add_chip(
-                f"Installed · v{self._installed_ver}",
-                "font-size: 9px; font-weight: 600; color: #15803d;"
-                " background: #dcfce7; border-radius: 4px; padding: 1px 5px;",
-            )
-        if latest_stable and self._installed_ver != latest_stable:
-            _add_chip(
-                f"Stable · v{latest_stable}",
-                "font-size: 9px; font-weight: 600; color: #1d4ed8;"
-                " background: #dbeafe; border-radius: 4px; padding: 1px 5px;",
-            )
-        if latest_prerelease and self._installed_ver != latest_prerelease:
-            _add_chip(
-                f"Beta · v{latest_prerelease}",
-                "font-size: 9px; font-weight: 500; color: #7c3aed;"
-                " background: #ede9fe; border-radius: 4px; padding: 1px 5px;",
-            )
+            if latest_stable and self._installed_ver == latest_stable:
+                _add_chip(
+                    f"v{self._installed_ver}  —  up to date",
+                    "font-size: 9px; font-weight: 600; color: #15803d;"
+                    " background: #dcfce7; border-radius: 4px; padding: 1px 5px;",
+                )
+            else:
+                _add_chip(
+                    f"v{self._installed_ver} installed",
+                    "font-size: 9px; font-weight: 600; color: #15803d;"
+                    " background: #dcfce7; border-radius: 4px; padding: 1px 5px;",
+                )
+                if latest_stable and _version_sort_key(latest_stable) > _version_sort_key(self._installed_ver):
+                    _add_chip(
+                        f"v{latest_stable} available",
+                        "font-size: 9px; font-weight: 600; color: #1d4ed8;"
+                        " background: #dbeafe; border-radius: 4px; padding: 1px 5px;",
+                    )
         self._chips_row.addStretch(1)
 
         has_asset = self._current_release_has_asset()
@@ -576,7 +583,12 @@ class _PackCard(QFrame):
             if self._installed_ver:
                 selected_key = _version_sort_key(selected_version)
                 installed_key = _version_sort_key(self._installed_ver)
-                self._btn.setText("Update" if selected_key > installed_key else "Install")
+                if selected_key > installed_key:
+                    self._btn.setText("Update")
+                elif selected_key < installed_key:
+                    self._btn.setText("Downgrade")
+                else:
+                    self._btn.setText("Reinstall")
             else:
                 self._btn.setText("Install")
             self._btn.setEnabled(True)
