@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QColor, QFont, QDesktopServices
 from PySide6.QtWidgets import (
@@ -274,5 +276,9 @@ class DevicesTab(QWidget):
 
     def _on_reload_requested(self, name: str):
         self.log_line.emit(f"Requesting reload for deck: {name}")
-        ok, msg = reload_deck(name)
-        self.log_line.emit(f"Reload {name}: {msg}")
+
+        def work() -> None:
+            ok, msg = reload_deck(name)
+            self.log_line.emit(f"Reload {name}: {msg}")
+
+        threading.Thread(target=work, name=f"ReloadDeck-{name}", daemon=True).start()

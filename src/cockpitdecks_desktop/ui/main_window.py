@@ -1686,11 +1686,15 @@ class MainWindow(QMainWindow):
         self._append(f"[decks] selected launch target: {path}")
         if self._launcher_is_running():
             base = f"http://127.0.0.1:{self._web_listen_port()}"
-            ok, msg = api_set_target(path, base_url=base)
-            if ok:
-                self._append(f"[decks] {msg}")
-            else:
-                self._append(f"[decks] could not switch live: {msg}")
+
+            def work() -> None:
+                ok, msg = api_set_target(path, base_url=base)
+                if ok:
+                    self.log_line.emit(f"[decks] {msg}")
+                else:
+                    self.log_line.emit(f"[decks] could not switch live: {msg}")
+
+            threading.Thread(target=work, name="SetTarget", daemon=True).start()
 
     def _use_auto_launch_target(self) -> None:
         self._select_launch_target("")
@@ -2484,9 +2488,13 @@ class MainWindow(QMainWindow):
     def reload_decks(self) -> None:
         self._append("[reload] requesting deck config reload...")
         st = load_desktop_settings()
-        ok, msg = api_reload_decks(base_url=cockpit_web_base(st))
-        tag = "reload" if ok else "error"
-        self._append(f"[{tag}] {msg}")
+
+        def work() -> None:
+            ok, msg = api_reload_decks(base_url=cockpit_web_base(st))
+            tag = "reload" if ok else "error"
+            self.log_line.emit(f"[{tag}] {msg}")
+
+        threading.Thread(target=work, name="ReloadDecks", daemon=True).start()
 
     def start_cockpitdecks(self) -> None:
         # Reset log-analysis state for the new launch
