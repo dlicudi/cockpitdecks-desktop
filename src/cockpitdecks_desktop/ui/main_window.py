@@ -459,7 +459,7 @@ class MainWindow(QMainWindow):
         for b in (self.btn_start, self.btn_restart, self.btn_stop, self.btn_reload):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self.btn_desktop_update_check = QPushButton("Check Desktop Updates")
+        self.btn_desktop_update_check = QPushButton("Check for Updates")
         self.btn_desktop_update_check.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_desktop_update_check.clicked.connect(self._check_desktop_updates_now)
 
