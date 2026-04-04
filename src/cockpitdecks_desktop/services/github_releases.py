@@ -24,7 +24,7 @@ elif sys.platform == "darwin":
     INSTALL_DIR = Path.home() / "Library" / "Application Support" / "CockpitdecksDesktop" / "bin"
 else:
     INSTALL_DIR = Path.home() / ".cockpitdecks" / "bin"
-DESKTOP_DOWNLOAD_DIR = Path.home() / "Downloads" / "CockpitdecksDesktop"
+DESKTOP_DOWNLOAD_DIR = Path.home() / "Downloads"
 BINARY_NAME = "cockpitdecks.exe" if sys.platform == "win32" else "cockpitdecks"
 VERSION_FILE = INSTALL_DIR / "version"
 
@@ -169,17 +169,24 @@ def desktop_download_dir() -> Path:
     return DESKTOP_DOWNLOAD_DIR
 
 
-def download_desktop_release(
+def desktop_default_extract_dir(tag: str) -> Path:
+    return desktop_download_dir() / f"cockpitdecks-desktop-{tag}"
+
+
+def download_and_extract_desktop_release(
     release: dict,
-    target_dir: Path | None = None,
+    dest_dir: Path | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     on_log: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> Path:
-    """Download a desktop release archive into the target directory and verify its checksum."""
+    """Download, verify, and extract a desktop release into the destination folder."""
     tag = release["tag_name"]
     log = on_log or (lambda msg: None)
-    target = target_dir or desktop_download_dir()
+    target = (dest_dir or desktop_default_extract_dir(tag)).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and any(target.iterdir()):
+        raise RuntimeError(f"Destination already exists and is not empty: {target}")
     target.mkdir(parents=True, exist_ok=True)
 
     archive_asset = _find_desktop_asset(release, ".zip")
@@ -187,40 +194,46 @@ def download_desktop_release(
     if not archive_asset:
         raise RuntimeError(f"No desktop asset found for {tag}")
 
-    archive_path = target / archive_asset["name"]
-    log(f"[desktop] downloading {archive_asset['name']} ({archive_asset['size']:,} bytes)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        archive_path = tmp / archive_asset["name"]
+        log(f"[desktop] downloading {archive_asset['name']} ({archive_asset['size']:,} bytes)")
 
-    req = urllib.request.Request(archive_asset["browser_download_url"])
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        total = int(resp.headers.get("Content-Length", 0))
-        done = 0
-        with open(archive_path, "wb") as fh:
-            while True:
-                if should_cancel and should_cancel():
-                    raise DownloadCancelledError()
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                fh.write(chunk)
-                done += len(chunk)
-                if on_progress:
-                    on_progress(done, total)
+        req = urllib.request.Request(archive_asset["browser_download_url"])
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            done = 0
+            with open(archive_path, "wb") as fh:
+                while True:
+                    if should_cancel and should_cancel():
+                        raise DownloadCancelledError()
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if on_progress:
+                        on_progress(done, total)
 
-    log(f"[desktop] download complete: {archive_path}")
+        log(f"[desktop] download complete: {archive_path.name}")
 
-    if sha256_asset:
-        log("[desktop] verifying SHA-256 checksum")
-        req = urllib.request.Request(sha256_asset["browser_download_url"])
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            expected = resp.read().decode("utf-8").split()[0]
-        actual = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-        if actual != expected:
-            raise RuntimeError(f"SHA-256 mismatch: expected {expected}, got {actual}")
-        log("[desktop] checksum OK")
-    else:
-        log("[desktop] warning: no checksum asset found")
+        if sha256_asset:
+            log("[desktop] verifying SHA-256 checksum")
+            req = urllib.request.Request(sha256_asset["browser_download_url"])
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                expected = resp.read().decode("utf-8").split()[0]
+            actual = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+            if actual != expected:
+                raise RuntimeError(f"SHA-256 mismatch: expected {expected}, got {actual}")
+            log("[desktop] checksum OK")
+        else:
+            log("[desktop] warning: no checksum asset found")
 
-    return archive_path
+        log(f"[desktop] extracting to {target}")
+        with zipfile.ZipFile(archive_path) as zf:
+            zf.extractall(target)
+
+    return target
 
 
 def download_and_install(

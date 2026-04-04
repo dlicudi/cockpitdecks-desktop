@@ -149,14 +149,16 @@ class DesktopUpdateDownloadWorker(QObject):
     finished = Signal(object, str)
     log = Signal(str)
 
-    def __init__(self, release: dict) -> None:
+    def __init__(self, release: dict, dest_dir: Path) -> None:
         super().__init__()
         self._release = release
+        self._dest_dir = dest_dir
 
     def run(self) -> None:
         try:
-            path = gh.download_desktop_release(
+            path = gh.download_and_extract_desktop_release(
                 self._release,
+                dest_dir=self._dest_dir,
                 on_progress=self.progress.emit,
                 on_log=self.log.emit,
             )
@@ -172,6 +174,7 @@ class DesktopUpdateDialog(QDialog):
         self._download_thread: QThread | None = None
         self._download_worker: DesktopUpdateDownloadWorker | None = None
         self._downloaded_path: Path | None = None
+        self._default_dest = gh.desktop_default_extract_dir(release.get("tag_name", "latest"))
 
         self.setWindowTitle(f"Cockpitdecks Desktop {release.get('tag_name', '')} available")
         self.resize(760, 620)
@@ -183,14 +186,13 @@ class DesktopUpdateDialog(QDialog):
             "QPushButton:disabled { color: #94a3b8; background: #f8fafc; }"
             "QTextEdit { font-size: 12px; color: #1e293b; background: #ffffff;"
             " border: 1px solid #e2e8f0; border-radius: 6px; }"
+            "QLineEdit { font-size: 12px; color: #1e293b; background: #ffffff;"
+            " border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 8px; }"
         )
 
         body = (release.get("body") or "").strip()
         body = re.sub(r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE).strip()
-        self._asset = next(
-            (asset for asset in release.get("assets", []) if asset.get("name", "").endswith(".zip") and gh.DESKTOP_ASSET_PLATFORM in asset.get("name", "")),
-            None,
-        )
+        self._asset = next((asset for asset in release.get("assets", []) if asset.get("name", "").endswith(".zip") and gh.DESKTOP_ASSET_PLATFORM in asset.get("name", "")), None)
 
         root = QVBoxLayout(self)
         root.setSpacing(10)
@@ -199,6 +201,18 @@ class DesktopUpdateDialog(QDialog):
         info.setWordWrap(True)
         info.setStyleSheet("color: #334155; font-size: 12px;")
         root.addWidget(info)
+
+        dest_label = QLabel("Extract to")
+        dest_label.setStyleSheet("color: #334155; font-size: 11px; font-weight: 600;")
+        root.addWidget(dest_label)
+
+        dest_row = QHBoxLayout()
+        self._dest_edit = QLineEdit(str(self._default_dest))
+        dest_row.addWidget(self._dest_edit, 1)
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self._browse_destination)
+        dest_row.addWidget(browse_btn)
+        root.addLayout(dest_row)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
@@ -222,7 +236,7 @@ class DesktopUpdateDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        self._download_btn = QPushButton("Download")
+        self._download_btn = QPushButton("Download and Extract")
         self._download_btn.clicked.connect(self._start_download)
         actions.addWidget(self._download_btn)
 
@@ -231,10 +245,10 @@ class DesktopUpdateDialog(QDialog):
         self._reveal_btn.setEnabled(False)
         actions.addWidget(self._reveal_btn)
 
-        self._open_archive_btn = QPushButton("Open Archive")
-        self._open_archive_btn.clicked.connect(self._open_archive)
-        self._open_archive_btn.setEnabled(False)
-        actions.addWidget(self._open_archive_btn)
+        self._open_folder_btn = QPushButton("Open Folder")
+        self._open_folder_btn.clicked.connect(self._open_folder)
+        self._open_folder_btn.setEnabled(False)
+        actions.addWidget(self._open_folder_btn)
 
         open_btn = QPushButton("Open Release Page")
         open_btn.clicked.connect(self._open_release_page)
@@ -247,33 +261,37 @@ class DesktopUpdateDialog(QDialog):
         root.addLayout(actions)
 
     def _instructions(self) -> str:
-        dest = _shorten_filesystem_path(gh.desktop_download_dir())
-        if sys.platform == "win32":
-            return (
-                f"A newer Cockpitdecks Desktop build is available. "
-                f"Download it to {dest}, extract the zip, then launch the new app from the extracted folder."
-            )
+        dest = _shorten_filesystem_path(self._default_dest)
         return (
             f"A newer Cockpitdecks Desktop build is available. "
-            f"Download it to {dest}, then replace your current app with the downloaded build."
+            f"Choose an extraction folder, then Desktop will download and extract the update for you. "
+            f"Default destination: {dest}."
         )
 
     def _meta_text(self) -> str:
         name = self._asset.get("name", "Unknown asset") if self._asset else "No matching platform asset found"
         size = self._asset.get("size", 0) if self._asset else 0
         size_mb = f"{size / (1024 * 1024):.1f} MB" if size else "unknown size"
-        return f"Asset: {name} | Size: {size_mb} | Download folder: {gh.desktop_download_dir()}"
+        return f"Asset: {name} | Size: {size_mb}"
+
+    def _browse_destination(self) -> None:
+        start = str(self._default_dest.parent)
+        chosen = QFileDialog.getExistingDirectory(self, "Choose parent folder for extracted update", start)
+        if chosen:
+            self._dest_edit.setText(str(Path(chosen) / self._default_dest.name))
 
     def _start_download(self) -> None:
         if self._download_thread is not None:
             return
+        dest = Path(self._dest_edit.text().strip() or str(self._default_dest)).expanduser()
+        self._dest_edit.setText(str(dest))
         self._progress.setValue(0)
         self._progress.show()
-        self._status.setText("Downloading desktop update…")
+        self._status.setText(f"Downloading and extracting to {dest}…")
         self._download_btn.setEnabled(False)
 
         self._download_thread = QThread(self)
-        self._download_worker = DesktopUpdateDownloadWorker(self._release)
+        self._download_worker = DesktopUpdateDownloadWorker(self._release, dest)
         self._download_worker.moveToThread(self._download_thread)
         self._download_thread.started.connect(self._download_worker.run)
         self._download_worker.progress.connect(self._on_download_progress)
@@ -295,29 +313,23 @@ class DesktopUpdateDialog(QDialog):
         self._progress.setRange(0, 100)
         self._download_btn.setEnabled(True)
         if error:
-            self._status.setText(f"Download failed: {error}")
+            self._status.setText(f"Update failed: {error}")
             return
         self._downloaded_path = Path(path)
         self._reveal_btn.setEnabled(True)
-        self._open_archive_btn.setEnabled(True)
+        self._open_folder_btn.setEnabled(True)
         self._progress.setValue(100)
-        if sys.platform == "win32":
-            self._status.setText(
-                f"Downloaded to {self._downloaded_path}. Next: extract the zip and launch the new app from the extracted folder."
-            )
-        else:
-            self._status.setText(
-                f"Downloaded to {self._downloaded_path}. Next: replace your current app with the downloaded build."
-            )
+        self._status.setText(
+            f"Update extracted to {self._downloaded_path}. Launch the new app from that folder."
+        )
 
     def _reveal_download(self) -> None:
-        target = self._downloaded_path.parent if self._downloaded_path else gh.desktop_download_dir()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+        target = self._downloaded_path if self._downloaded_path else Path(self._dest_edit.text().strip() or str(self._default_dest))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent)))
 
-    def _open_archive(self) -> None:
-        if self._downloaded_path is None:
-            return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._downloaded_path)))
+    def _open_folder(self) -> None:
+        target = self._downloaded_path if self._downloaded_path else Path(self._dest_edit.text().strip() or str(self._default_dest))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def _open_release_page(self) -> None:
         url = self._release.get("html_url") or ""

@@ -77,12 +77,10 @@ def _split_paths(raw: object) -> list[str]:
     if raw is None:
         return []
     if isinstance(raw, (list, tuple)):
-        out: list[str] = []
-        for item in raw:
-            s = str(item or "").strip()
-            if s:
-                out.append(s)
-        return out
+        items = [str(item or "").strip() for item in raw if str(item or "").strip()]
+        if sys.platform == "win32" and len(items) == 2 and re.fullmatch(r"[A-Za-z]", items[0]) and items[1].startswith("\\"):
+            return [f"{items[0]}:{items[1]}"]
+        return items
     text = str(raw).strip()
     if not text:
         return []
