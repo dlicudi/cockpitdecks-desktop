@@ -538,8 +538,8 @@ class MainWindow(QMainWindow):
         #  DIAGNOSTICS TAB
         # ════════════════════════════════════════
         self.diag_tab = DiagnosticsTab()
-        tab_diag = QWidget()
-        tab_diag_layout = QVBoxLayout(tab_diag)
+        self._diag_tab_page = QWidget()
+        tab_diag_layout = QVBoxLayout(self._diag_tab_page)
         tab_diag_layout.setContentsMargins(0, 0, 0, 0)
         tab_diag_layout.setSpacing(0)
         tab_diag_layout.addWidget(self.diag_tab, 1)
@@ -772,9 +772,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab_decks, "Decks")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(self.releases_tab, "Releases")
-        self.tabs.addTab(tab_diag, "Diagnostics")
+        self.tabs.addTab(self._diag_tab_page, "Diagnostics")
         self.tabs.addTab(tab_logs, "Logs")
-        self.diag_tab = tab_diag
 
         root.addWidget(header)
         root.addWidget(action_bar)
@@ -2524,7 +2523,7 @@ class MainWindow(QMainWindow):
         self._header_poll_time.setText(f"Last poll {polled_at}")
         self._refresh_status_value_styles()
         current_tab = self.tabs.currentWidget()
-        if current_tab is self.diag_tab:
+        if current_tab is self._diag_tab_page:
             self._refresh_diagnostics_panel()
         elif current_tab is self.devices_tab:
             self._refresh_devices_panel()
@@ -2541,7 +2540,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, _index: int) -> None:
         current_tab = self.tabs.currentWidget()
-        if current_tab is self.diag_tab:
+        if current_tab is self._diag_tab_page:
             self._refresh_diagnostics_panel()
         elif current_tab is self.devices_tab:
             self._refresh_devices_panel()
