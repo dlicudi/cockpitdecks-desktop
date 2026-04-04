@@ -4,16 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import sys
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Callable
 
 GITHUB_REPO = "dlicudi/cockpitdecks"
-ASSET_PLATFORM = "macos-arm64"
-INSTALL_DIR = Path.home() / ".cockpitdecks" / "bin"
-BINARY_NAME = "cockpitdecks"
+ASSET_PLATFORM = "windows-x64" if sys.platform == "win32" else "macos-arm64"
+if sys.platform == "win32":
+    INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "CockpitdecksDesktop" / "bin"
+elif sys.platform == "darwin":
+    INSTALL_DIR = Path.home() / "Library" / "Application Support" / "CockpitdecksDesktop" / "bin"
+else:
+    INSTALL_DIR = Path.home() / ".cockpitdecks" / "bin"
+BINARY_NAME = "cockpitdecks.exe" if sys.platform == "win32" else "cockpitdecks"
 VERSION_FILE = INSTALL_DIR / "version"
 
 _API_BASE = "https://api.github.com"
@@ -93,7 +102,7 @@ def installed_binary() -> Path:
 
 
 def has_binary_asset(release: dict) -> bool:
-    return _find_asset(release, ".tar.gz") is not None
+    return _find_binary_asset(release) is not None
 
 
 def _find_asset(release: dict, suffix: str) -> dict | None:
@@ -103,6 +112,11 @@ def _find_asset(release: dict, suffix: str) -> dict | None:
         if asset["name"] == name:
             return asset
     return None
+
+
+def _find_binary_asset(release: dict) -> dict | None:
+    suffix = ".zip" if sys.platform == "win32" else ".tar.gz"
+    return _find_asset(release, suffix)
 
 
 class DownloadCancelledError(Exception):
@@ -123,24 +137,25 @@ def download_and_install(
     tag = release["tag_name"]
     log = on_log or (lambda msg: None)
 
-    tarball_asset = _find_asset(release, ".tar.gz")
-    sha256_asset = _find_asset(release, ".tar.gz.sha256")
+    binary_asset = _find_binary_asset(release)
+    archive_suffix = ".zip" if sys.platform == "win32" else ".tar.gz"
+    sha256_asset = _find_asset(release, f"{archive_suffix}.sha256")
 
-    if not tarball_asset:
+    if not binary_asset:
         raise RuntimeError(f"No {ASSET_PLATFORM} asset found for {tag}")
 
-    log(f"[releases] downloading {tarball_asset['name']} ({tarball_asset['size']:,} bytes)")
+    log(f"[releases] downloading {binary_asset['name']} ({binary_asset['size']:,} bytes)")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-        tarball_path = tmp / tarball_asset["name"]
+        archive_path = tmp / binary_asset["name"]
 
         # Download tarball with progress
-        req = urllib.request.Request(tarball_asset["browser_download_url"])
+        req = urllib.request.Request(binary_asset["browser_download_url"])
         with urllib.request.urlopen(req, timeout=120) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             done = 0
-            with open(tarball_path, "wb") as fh:
+            with open(archive_path, "wb") as fh:
                 while True:
                     if should_cancel and should_cancel():
                         raise DownloadCancelledError()
@@ -162,30 +177,36 @@ def download_and_install(
             with urllib.request.urlopen(req, timeout=10) as resp:
                 sha256_path.write_bytes(resp.read())
             expected = sha256_path.read_text().split()[0]
-            actual = hashlib.sha256(tarball_path.read_bytes()).hexdigest()
+            actual = hashlib.sha256(archive_path.read_bytes()).hexdigest()
             if actual != expected:
                 raise RuntimeError(f"SHA-256 mismatch: expected {expected}, got {actual}")
             log("[releases] checksum OK")
         else:
             log("[releases] warning: no SHA-256 asset found, skipping verification")
 
-        # Extract binary from tarball
         log("[releases] extracting binary")
-        with tarfile.open(tarball_path) as tf:
-            binary_member = next(
-                (m for m in tf.getmembers() if m.name.endswith(f"/{BINARY_NAME}") or m.name == BINARY_NAME),
-                None,
-            )
-            if not binary_member:
-                raise RuntimeError(f"'{BINARY_NAME}' not found in tarball")
-            extracted = tf.extractfile(binary_member)
-            if not extracted:
-                raise RuntimeError("Failed to extract binary from tarball")
-
-            INSTALL_DIR.mkdir(parents=True, exist_ok=True)
-            binary_path = _binary_path_for_tag(tag)
-            binary_path.write_bytes(extracted.read())
-            binary_path.chmod(0o755)
+        INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+        binary_path = _binary_path_for_tag(tag)
+        if sys.platform == "win32":
+            with zipfile.ZipFile(archive_path) as zf:
+                binary_member = next((m for m in zf.namelist() if m.endswith(f"/{BINARY_NAME}") or m == BINARY_NAME), None)
+                if not binary_member:
+                    raise RuntimeError(f"'{BINARY_NAME}' not found in zip archive")
+                with zf.open(binary_member) as extracted, binary_path.open("wb") as out:
+                    shutil.copyfileobj(extracted, out)
+        else:
+            with tarfile.open(archive_path) as tf:
+                binary_member = next(
+                    (m for m in tf.getmembers() if m.name.endswith(f"/{BINARY_NAME}") or m.name == BINARY_NAME),
+                    None,
+                )
+                if not binary_member:
+                    raise RuntimeError(f"'{BINARY_NAME}' not found in tarball")
+                extracted = tf.extractfile(binary_member)
+                if not extracted:
+                    raise RuntimeError("Failed to extract binary from tarball")
+                binary_path.write_bytes(extracted.read())
+                binary_path.chmod(0o755)
 
         VERSION_FILE.write_text(tag + "\n")
         log(f"[releases] installed {tag} → {binary_path}")

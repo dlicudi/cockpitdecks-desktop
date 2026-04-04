@@ -460,7 +460,7 @@ class ReleasesTab(QWidget):
         if not releases:
             self._fetch_status.setText("No releases found.")
         elif not has_any_asset:
-            self._fetch_status.setText(f"{len(releases)} releases — no macOS arm64 binaries published yet.")
+            self._fetch_status.setText(f"{len(releases)} releases — no {gh.ASSET_PLATFORM} binaries published yet.")
         else:
             self._fetch_status.hide()
 

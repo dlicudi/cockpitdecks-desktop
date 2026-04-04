@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -36,14 +37,23 @@ def stream_shell_command(
     on_output: Callable[[str], None] | None = None,
 ) -> int:
     """Run a shell command and stream merged stdout/stderr lines."""
+    if sys.platform == "win32":
+        executable = "powershell.exe"
+        shell_command = ["-NoProfile", "-Command", command]
+        use_shell = False
+    else:
+        executable = "/bin/zsh"
+        shell_command = command
+        use_shell = True
+
     proc = subprocess.Popen(
-        command,
+        shell_command,
         cwd=str(cwd) if cwd is not None else None,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        shell=True,
-        executable="/bin/zsh",
+        shell=use_shell,
+        executable=executable,
     )
     assert proc.stdout is not None
     for line in proc.stdout:

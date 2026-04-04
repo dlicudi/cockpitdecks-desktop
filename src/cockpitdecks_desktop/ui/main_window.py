@@ -1752,8 +1752,11 @@ class MainWindow(QMainWindow):
             exe_dir = Path(sys.executable).resolve().parent
             candidates = [
                 exe_dir / "cockpitdecks",
+                exe_dir / "cockpitdecks.exe",
                 exe_dir / "resources" / "cockpitdecks",
+                exe_dir / "resources" / "cockpitdecks.exe",
                 Path(getattr(sys, "_MEIPASS", exe_dir)) / "cockpitdecks",
+                Path(getattr(sys, "_MEIPASS", exe_dir)) / "cockpitdecks.exe",
             ]
             for candidate in candidates:
                 if candidate.exists():
@@ -1761,7 +1764,10 @@ class MainWindow(QMainWindow):
             return managed  # not found — return managed path for a clear "Missing" error message
 
         # Dev mode: run the local launcher built in cockpitdecks repo.
-        return self._repo("cockpitdecks") / "dist" / "cockpitdecks"
+        dist_dir = self._repo("cockpitdecks") / "dist"
+        if sys.platform == "win32":
+            return dist_dir / "cockpitdecks.exe"
+        return dist_dir / "cockpitdecks"
 
     def _on_release_installed(self, tag: str) -> None:
         """Called after a successful install from the Releases tab."""

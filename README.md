@@ -107,6 +107,7 @@ They help identify slow event processing, render or flush pressure, queue buildu
 
 - Python 3.12+
 - macOS is the main target today
+- Windows support is feasible and now has a build-only workflow, but it should still be treated as beta
 
 ### Editable install
 
@@ -131,6 +132,8 @@ scripts/build_desktop.sh
 LAUNCHER_SRC=/path/to/cockpitdecks scripts/build_desktop.sh
 ```
 
+On Windows, the equivalent sidecar path is expected to be `../cockpitdecks/dist/cockpitdecks.exe`.
+
 ## Managed `cockpitdecks` Releases
 
 The Releases tab installs managed `cockpitdecks` binaries under the desktop app's install area instead of overwriting one shared binary each time.
@@ -153,6 +156,17 @@ GitHub Actions can build and publish a macOS arm64 desktop app from this repo, b
 - Output artifact: `cockpitdecks-desktop-macos-arm64-<tag>.tar.gz`
 
 The workflow downloads `cockpitdecks-macos-arm64-<launcher_tag>.tar.gz` from the configured `cockpitdecks` repository, verifies its SHA-256 checksum, unpacks `cockpitdecks`, bundles it into `Cockpitdecks Desktop.app`, and publishes the desktop artifact plus `build-metadata.json`.
+
+## Automated Windows x64 Build
+
+GitHub Actions can also produce a first-pass Windows x64 desktop artifact from this repo.
+
+- Workflow: `.github/workflows/build-desktop-windows-x64.yml`
+- Trigger: manual `workflow_dispatch`
+- Output artifact: `cockpitdecks-desktop-windows-x64-<build-id>.zip`
+- Release status: build-only for now
+
+This Windows workflow builds the Qt desktop executable itself. The desktop app can already manage Windows `cockpitdecks` launcher assets by downloading `cockpitdecks-windows-x64-<tag>.zip` releases and extracting `cockpitdecks.exe`.
 
 ## App Icon
 

@@ -1,0 +1,89 @@
+name: Build Cockpitdecks Desktop Windows x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_label:
+        description: "Artifact label suffix (e.g. test-windows)"
+        required: true
+        default: manual
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cockpitdecks-desktop-windows-x64-${{ github.event.inputs.build_label }}
+  cancel-in-progress: false
+
+jobs:
+  build-only:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout cockpitdecks-desktop
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve build tag
+        env:
+          MANUAL_BUILD_LABEL: ${{ github.event.inputs.build_label }}
+        run: |
+          set -euo pipefail
+          BUILD_LABEL="${MANUAL_BUILD_LABEL:-manual}"
+          BUILD_ID="manual-${BUILD_LABEL}-${GITHUB_RUN_ID}"
+          echo "BUILD_ID=${BUILD_ID}" >> "${GITHUB_ENV}"
+          {
+            echo "### Desktop Windows build configuration"
+            echo
+            echo "- build id: \`${BUILD_ID}\`"
+            echo "- runner architecture: \`${PROCESSOR_ARCHITECTURE:-unknown}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml', 'packaging/pyinstaller/desktop.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Build desktop app
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/Scripts/activate
+          python -m pip install --upgrade pip setuptools wheel hatchling
+          python -m pip install pyinstaller
+          python -m pip install -e .
+          .venv/Scripts/pyinstaller.exe --clean packaging/pyinstaller/desktop.spec
+
+      - name: Verify desktop app
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/cockpitdecks-desktop/cockpitdecks-desktop.exe")) { throw "dist/cockpitdecks-desktop/cockpitdecks-desktop.exe not found" }
+
+      - name: Package build artifact
+        shell: pwsh
+        run: |
+          $artifactBase = "cockpitdecks-desktop-windows-x64-$env:BUILD_ID"
+          Compress-Archive -Path "dist/cockpitdecks-desktop/*" -DestinationPath "$artifactBase.zip" -Force
+          $hash = (Get-FileHash "$artifactBase.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash *$artifactBase.zip" | Set-Content "$artifactBase.zip.sha256"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}
+          path: |
+            cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}.zip
+            cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}.zip.sha256
