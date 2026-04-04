@@ -112,7 +112,7 @@ def _flatten_runtime(raw: dict) -> dict[str, str]:
     xplane_api = raw.get("xplane_api") if isinstance(raw.get("xplane_api"), dict) else {}
     server = raw.get("cockpitdecks_server") if isinstance(raw.get("cockpitdecks_server"), dict) else {}
     return {
-        "COCKPITDECKS_PATH": ":".join(_split_paths(raw.get("deck_paths") or "")),
+        "COCKPITDECKS_PATH": ":".join(_split_paths(raw.get("deck_paths"))),
         "COCKPITDECKS_TARGET": str(raw.get("target") or "").strip(),
         "SIMULATOR_HOST": str(raw.get("simulator_host") or "").strip(),
         "API_HOST": str(xplane_api.get("host") or SHARED_DEFAULTS["API_HOST"]).strip() or SHARED_DEFAULTS["API_HOST"],
