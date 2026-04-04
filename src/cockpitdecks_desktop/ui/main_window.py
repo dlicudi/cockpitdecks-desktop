@@ -2169,18 +2169,28 @@ class MainWindow(QMainWindow):
             try:
                 current_tag = f"v{self._desktop_app_version()}"
                 try:
-                    release = gh.latest_desktop_release()
+                    release, meta = gh.latest_desktop_release_info(
+                        force_refresh=self._manual_desktop_update_check,
+                        min_interval=gh.MANUAL_REFRESH_MIN_INTERVAL_SECS if self._manual_desktop_update_check else gh.AUTO_REFRESH_INTERVAL_SECS,
+                    )
                 except Exception as exc:
                     self.desktop_update_done.emit(None, f"[desktop] update check failed: {exc}")
                     return
+                cache_note = ""
+                if meta.get("source") == "cache" and meta.get("cached_at"):
+                    cache_note = f" (cached {gh._format_cached_at(meta.get('cached_at'))})"
                 if release is None:
-                    self.desktop_update_done.emit(None, "")
+                    if meta.get("error"):
+                        self.desktop_update_done.emit(None, f"[desktop] update check used cached data{cache_note}: {meta.get('error')}")
+                    else:
+                        self.desktop_update_done.emit(None, "")
                     return
                 latest_tag = release.get("tag_name", "")
                 if gh.version_sort_key(latest_tag) > gh.version_sort_key(current_tag):
-                    self.desktop_update_done.emit(release, f"[desktop] update available: {latest_tag}")
+                    self.desktop_update_done.emit(release, f"[desktop] update available: {latest_tag}{cache_note}")
                 else:
-                    self.desktop_update_done.emit(None, "")
+                    extra = f"[desktop] update check used cached data{cache_note}: {meta.get('error')}" if meta.get("error") else ""
+                    self.desktop_update_done.emit(None, extra)
             finally:
                 self._desktop_update_lock.release()
 

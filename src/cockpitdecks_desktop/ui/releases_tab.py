@@ -437,24 +437,25 @@ class ReleasesTab(QWidget):
     def showEvent(self, event) -> None:  # type: ignore[override]
         super().showEvent(event)
         if not self._fetched:
-            self.refresh()
+            self.refresh(initial=True)
 
-    def refresh(self) -> None:
+    def refresh(self, *, initial: bool = False) -> None:
         self._fetched = True
+        force_refresh = not initial
         self._refresh_btn.setEnabled(False)
         self._fetch_status.setText("Fetching releases…")
         self._fetch_status.setStyleSheet("color: #9ca3af; font-size: 12px;")
         self._fetch_status.show()
         self._clear_list()
 
-        worker = _FetchWorker()
+        worker = _FetchWorker(force_refresh=force_refresh, min_interval=gh.MANUAL_REFRESH_MIN_INTERVAL_SECS if force_refresh else gh.AUTO_REFRESH_INTERVAL_SECS)
         worker.succeeded.connect(self._on_fetch_done)
         worker.failed.connect(self._on_fetch_error)
         worker.setParent(self)
         self._fetch_worker = worker
         worker.start()
 
-    def _on_fetch_done(self, releases: list) -> None:
+    def _on_fetch_done(self, releases: list, meta: dict) -> None:
         self._refresh_btn.setEnabled(True)
         active_tag = gh.installed_version()
         installed_tags = set(gh.installed_versions().keys())
@@ -488,7 +489,23 @@ class ReleasesTab(QWidget):
         elif not has_any_asset:
             self._fetch_status.setText(f"{len(releases)} releases — no {gh.ASSET_PLATFORM} binaries published yet.")
         else:
-            self._fetch_status.hide()
+            source = meta.get("source", "")
+            stale = bool(meta.get("stale"))
+            err = str(meta.get("error") or "").strip()
+            cached_at = gh._format_cached_at(meta.get("cached_at"))
+            if stale and err:
+                self._fetch_status.setText(f"Using cached release data from {cached_at} — refresh failed: {err}")
+                self._fetch_status.setStyleSheet("color: #b45309; font-size: 12px;")
+                self._fetch_status.show()
+            elif source == "cache":
+                if err:
+                    self._fetch_status.setText(f"Using cached release data from {cached_at} — {err}")
+                else:
+                    self._fetch_status.setText(f"Using cached release data from {cached_at}")
+                self._fetch_status.setStyleSheet("color: #6b7280; font-size: 12px;")
+                self._fetch_status.show()
+            else:
+                self._fetch_status.hide()
 
     def _on_fetch_error(self, error: str) -> None:
         self._refresh_btn.setEnabled(True)
@@ -553,12 +570,17 @@ class ReleasesTab(QWidget):
 
 
 class _FetchWorker(QThread):
-    succeeded = Signal(list)
+    succeeded = Signal(list, dict)
     failed = Signal(str)
+
+    def __init__(self, *, force_refresh: bool = False, min_interval: int | None = None) -> None:
+        super().__init__()
+        self._force_refresh = force_refresh
+        self._min_interval = min_interval
 
     def run(self) -> None:
         try:
-            releases = gh.fetch_releases()
-            self.succeeded.emit(releases)
+            releases, meta = gh.fetch_releases_cached(force_refresh=self._force_refresh, min_interval=self._min_interval)
+            self.succeeded.emit(releases, meta)
         except Exception as exc:
             self.failed.emit(str(exc))

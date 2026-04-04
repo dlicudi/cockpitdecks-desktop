@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import time
 import shutil
 import sys
 import tarfile
@@ -27,6 +29,9 @@ else:
 DESKTOP_DOWNLOAD_DIR = Path.home() / "Downloads"
 BINARY_NAME = "cockpitdecks.exe" if sys.platform == "win32" else "cockpitdecks"
 VERSION_FILE = INSTALL_DIR / "version"
+
+AUTO_REFRESH_INTERVAL_SECS = 30 * 60
+MANUAL_REFRESH_MIN_INTERVAL_SECS = 60
 
 _API_BASE = "https://api.github.com"
 _API_HEADERS = {
@@ -60,6 +65,76 @@ def version_sort_key(tag: str) -> tuple:
         pre_order = {"alpha": 0, "beta": 1, "rc": 2}.get(pre_name, -1)
         return base_tuple + (0, pre_order, pre_num)
     return base_tuple + (1, 0, 0)
+
+
+def _releases_cache_dir() -> Path:
+    if sys.platform == "win32":
+        root = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "CockpitdecksDesktop"
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library" / "Application Support" / "CockpitdecksDesktop"
+    else:
+        root = Path.home() / ".config" / "cockpitdecks-desktop"
+    return root / "cache"
+
+
+def _repo_cache_key(repo: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", repo)
+
+
+def _releases_cache_paths(repo: str) -> tuple[Path, Path]:
+    cache_dir = _releases_cache_dir()
+    key = _repo_cache_key(repo)
+    return cache_dir / f"{key}.json", cache_dir / f"{key}.meta.json"
+
+
+def _load_cached_releases(repo: str) -> tuple[list[dict] | None, float | None]:
+    data_path, meta_path = _releases_cache_paths(repo)
+    try:
+        raw = json.loads(data_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(raw, list):
+        return None, None
+    cached_at = meta.get("cached_at") if isinstance(meta, dict) else None
+    try:
+        cached_ts = float(cached_at) if cached_at is not None else None
+    except (TypeError, ValueError):
+        cached_ts = None
+    return raw, cached_ts
+
+
+def _save_cached_releases(repo: str, releases: list[dict]) -> float:
+    data_path, meta_path = _releases_cache_paths(repo)
+    data_path.parent.mkdir(parents=True, exist_ok=True)
+    cached_at = time.time()
+    data_path.write_text(json.dumps(releases), encoding="utf-8")
+    meta_path.write_text(json.dumps({"cached_at": cached_at}), encoding="utf-8")
+    return cached_at
+
+
+def fetch_releases_cached(repo: str = GITHUB_REPO, *, force_refresh: bool = False, min_interval: int | None = None) -> tuple[list[dict], dict]:
+    cached, cached_at = _load_cached_releases(repo)
+    now = time.time()
+    min_age = AUTO_REFRESH_INTERVAL_SECS if min_interval is None else max(0, int(min_interval))
+    if cached is not None and not force_refresh and cached_at is not None and (now - cached_at) < min_age:
+        return cached, {"source": "cache", "cached_at": cached_at, "stale": False, "error": ""}
+    if cached is not None and force_refresh and cached_at is not None and (now - cached_at) < min_age:
+        return cached, {"source": "cache", "cached_at": cached_at, "stale": False, "error": f"Refresh limited: try again in {max(1, int(min_age - (now - cached_at)))}s"}
+    try:
+        releases = fetch_releases(repo=repo)
+    except Exception as exc:
+        if cached is not None:
+            return cached, {"source": "cache", "cached_at": cached_at, "stale": True, "error": str(exc)}
+        raise
+    saved_at = _save_cached_releases(repo, releases)
+    return releases, {"source": "network", "cached_at": saved_at, "stale": False, "error": ""}
+
+
+def _format_cached_at(ts: float | None) -> str:
+    if not ts:
+        return "unknown time"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
 def _binary_path_for_tag(tag: str) -> Path:
@@ -150,15 +225,20 @@ def _find_desktop_asset(release: dict, suffix: str) -> dict | None:
     return None
 
 
-def latest_desktop_release(repo: str = DESKTOP_GITHUB_REPO) -> dict | None:
-    """Return the newest cockpitdecks-desktop release that has a matching platform asset."""
+def latest_desktop_release_info(repo: str = DESKTOP_GITHUB_REPO, *, force_refresh: bool = False, min_interval: int | None = None) -> tuple[dict | None, dict]:
+    """Return newest matching desktop release plus fetch metadata."""
     suffix = ".zip"
-    releases = fetch_releases(repo=repo)
+    releases, meta = fetch_releases_cached(repo=repo, force_refresh=force_refresh, min_interval=min_interval)
     candidates = [r for r in releases if _find_desktop_asset(r, suffix) is not None]
     if not candidates:
-        return None
+        return None, meta
     candidates.sort(key=lambda r: version_sort_key(r.get("tag_name", "")), reverse=True)
-    return candidates[0]
+    return candidates[0], meta
+
+
+def latest_desktop_release(repo: str = DESKTOP_GITHUB_REPO) -> dict | None:
+    release, _ = latest_desktop_release_info(repo=repo)
+    return release
 
 
 class DownloadCancelledError(Exception):
