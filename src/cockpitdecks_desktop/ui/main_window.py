@@ -774,6 +774,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.releases_tab, "Releases")
         self.tabs.addTab(tab_diag, "Diagnostics")
         self.tabs.addTab(tab_logs, "Logs")
+        self.diag_tab = tab_diag
 
         root.addWidget(header)
         root.addWidget(action_bar)
@@ -797,6 +798,7 @@ class MainWindow(QMainWindow):
         self.live_poll_done.connect(self._apply_live_poll)
         self.desktop_update_done.connect(self._apply_desktop_update_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         self.setStyleSheet(MAIN_WINDOW_QSS)
         self.btn_clear_logs.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2063,6 +2065,24 @@ class MainWindow(QMainWindow):
             return
         self._set_diag_warning("Queue and render pipeline look stable", "ok")
 
+    def _devices_base_url(self) -> str:
+        import socket
+
+        try:
+            hostname = socket.gethostname()
+            if "." not in hostname and sys.platform == "darwin":
+                hostname += ".local"
+        except Exception:
+            hostname = "127.0.0.1"
+
+        return f"http://{hostname}:{self._web_listen_port()}"
+
+    def _refresh_devices_panel(self) -> None:
+        self.devices_tab.update_decks(
+            self._last_session_info.decks_detail if self._last_session_info else [],
+            base_url=self._devices_base_url(),
+        )
+
     def _refresh_diagnostics_panel(self) -> None:
         settings = load_desktop_settings()
         launcher = self._resolve_launcher_binary()
@@ -2138,21 +2158,6 @@ class MainWindow(QMainWindow):
             xplane_text, _check_ok(self.info_xplane.text()),
             hw_text, hw_ok,
         )
-        import socket
-        try:
-            hostname = socket.gethostname()
-            if "." not in hostname and sys.platform == "darwin":
-                hostname += ".local"
-        except Exception:
-            hostname = "127.0.0.1"
-        
-        web_port = self._web_listen_port()
-        base_url = f"http://{hostname}:{web_port}"
-        
-        self.devices_tab.update_decks(
-            self._last_session_info.decks_detail if self._last_session_info else [],
-            base_url=base_url
-        )
 
         # ── Runtime pressure ──
         queue_text = self.metric_queue_depth.text()
@@ -2174,31 +2179,6 @@ class MainWindow(QMainWindow):
             log=_shorten_filesystem_path(launch_log, max_len=96) if launch_log else "Not configured",
             crash=(_shorten_filesystem_path(crash_log, max_len=80) + (" | present" if crash_log.exists() else " | none yet")),
             exit_code=str(self._last_launcher_exit_code) if self._last_launcher_exit_code is not None else "—",
-        )
-
-        # ── Topology diagram ──
-        session = self._last_session_info
-        self.topology_tab.update_topology(
-            launcher_status=launcher_level,
-            launcher_label=launcher_health,
-            launcher_custom=settings.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM", "0") == "1",
-            launcher_pid=self._launcher_process.pid if self._launcher_is_running() else None,
-            cockpit_status=cockpit_level,
-            cockpit_label=cockpit_text,
-            cockpit_version=session.version if session and session.ok else "",
-            cockpit_uptime=self.metric_uptime.text(),
-            cockpit_aircraft=session.aircraft if session and session.ok else "",
-            xplane_status=xp_level,
-            xplane_label=xp_text,
-            desktop_label=f"v{self._desktop_app_version()}",
-            cockpit_reachable=_check_ok(self.info_cockpit_web.text()),
-            xplane_reachable=_check_ok(self.info_xplane.text()),
-            launcher_running=launcher_running,
-            decks=session.decks_detail if session and session.ok else [],
-            dataref_rate=self.metric_dataref_rate.text(),
-            ws_rate=self.metric_ws_rate.text(),
-            cockpit_web_host=settings.get("COCKPIT_WEB_HOST", "127.0.0.1"),
-            cockpit_web_port=settings.get("COCKPIT_WEB_PORT", "7777"),
         )
 
     def _build_diagnostics_bundle(self) -> dict:
@@ -2230,6 +2210,63 @@ class MainWindow(QMainWindow):
             "metrics": metrics,
             "logs": self.log.toPlainText().splitlines()[-500:],
         }
+
+    def _refresh_topology_panel(self) -> None:
+        settings = load_desktop_settings()
+        launcher = self._resolve_launcher_binary()
+        launcher_running = self._launcher_is_running()
+        listener = self._cached_listener
+
+        if not launcher.exists():
+            launcher_health, launcher_level = "Missing", "error"
+        elif launcher_running:
+            launcher_health, launcher_level = "Running", "ok"
+        elif self._last_launcher_exit_code not in (None, 0):
+            launcher_health, launcher_level = f"Exited ({self._last_launcher_exit_code})", "error"
+        elif listener is not None:
+            launcher_health, launcher_level = f"Port {self._web_listen_port()} in use", "warn"
+        else:
+            launcher_health, launcher_level = "Ready", "neutral"
+
+        cockpit_text = self.info_cockpit_web.text()
+        if self._last_session_info is not None and self._last_session_info.ok:
+            cockpit_text = f"OK | {self._last_session_info.aircraft}"
+        cockpit_level = "ok" if "ok" in cockpit_text.lower() else ("error" if "unreachable" in cockpit_text.lower() else "neutral")
+
+        xp_text = self.info_xplane.text()
+        xp_level = "ok" if "v" in xp_text.lower() and "unreachable" not in xp_text.lower() else ("error" if "unreachable" in xp_text.lower() else "neutral")
+
+        def _check_ok(text: str) -> bool | None:
+            t = text.lower()
+            if "unreachable" in t or "error" in t or "refused" in t:
+                return False
+            if "ok" in t or "v1" in t or "v2" in t or "v3" in t or text.strip() not in ("—", "…", ""):
+                return True
+            return None
+
+        session = self._last_session_info
+        self.topology_tab.update_topology(
+            launcher_status=launcher_level,
+            launcher_label=launcher_health,
+            launcher_custom=settings.get("COCKPITDECKS_LAUNCHER_USE_CUSTOM", "0") == "1",
+            launcher_pid=self._launcher_process.pid if launcher_running else None,
+            cockpit_status=cockpit_level,
+            cockpit_label=cockpit_text,
+            cockpit_version=session.version if session and session.ok else "",
+            cockpit_uptime=self.metric_uptime.text(),
+            cockpit_aircraft=session.aircraft if session and session.ok else "",
+            xplane_status=xp_level,
+            xplane_label=xp_text,
+            desktop_label=f"v{self._desktop_app_version()}",
+            cockpit_reachable=_check_ok(self.info_cockpit_web.text()),
+            xplane_reachable=_check_ok(self.info_xplane.text()),
+            launcher_running=launcher_running,
+            decks=session.decks_detail if session and session.ok else [],
+            dataref_rate=self.metric_dataref_rate.text(),
+            ws_rate=self.metric_ws_rate.text(),
+            cockpit_web_host=settings.get("COCKPIT_WEB_HOST", "127.0.0.1"),
+            cockpit_web_port=settings.get("COCKPIT_WEB_PORT", "7777"),
+        )
 
     def export_diagnostics_bundle(self) -> None:
         default_name = f"cockpitdecks-desktop-diagnostics-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
@@ -2486,7 +2523,13 @@ class MainWindow(QMainWindow):
         self.info_live_poll_at.setText(polled_at)
         self._header_poll_time.setText(f"Last poll {polled_at}")
         self._refresh_status_value_styles()
-        self._refresh_diagnostics_panel()
+        current_tab = self.tabs.currentWidget()
+        if current_tab is self.diag_tab:
+            self._refresh_diagnostics_panel()
+        elif current_tab is self.devices_tab:
+            self._refresh_devices_panel()
+        elif current_tab is self.topology_tab:
+            self._refresh_topology_panel()
 
         # Update connectivity dots
         xp_lower = xplane_line.lower()
@@ -2495,6 +2538,15 @@ class MainWindow(QMainWindow):
         self._set_dot(self._dot_cockpit_web, "error" if "unreachable" in web_lower else "ok")
 
         self._update_preflight_checks(xplane_line, cockpit_web_line, session_info)
+
+    def _on_tab_changed(self, _index: int) -> None:
+        current_tab = self.tabs.currentWidget()
+        if current_tab is self.diag_tab:
+            self._refresh_diagnostics_panel()
+        elif current_tab is self.devices_tab:
+            self._refresh_devices_panel()
+        elif current_tab is self.topology_tab:
+            self._refresh_topology_panel()
 
     def _update_preflight_checks(self, xplane_line: str, cockpit_web_line: str, session_info: "SessionInfo") -> None:
         def _set(icon: QLabel, lbl: QLabel, ok: bool | None, text: str) -> None:
