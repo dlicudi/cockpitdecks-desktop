@@ -14,8 +14,8 @@ import threading
 import time
 import zipfile
 
-from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal, QUrl
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCharFormat, QColor, QTextCursor, QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -58,6 +58,7 @@ from cockpitdecks_desktop.services.live_apis import (
     xplane_capabilities_status_line,
 )
 from cockpitdecks_desktop.services.process_runner import stream_shell_command
+from cockpitdecks_desktop.services import github_releases as gh
 from cockpitdecks_desktop.ui.app_style import MAIN_WINDOW_QSS
 from cockpitdecks_desktop.ui.deck_packs_tab import DeckPacksTab
 from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
@@ -141,6 +142,7 @@ class CommandWorker(QObject):
 class MainWindow(QMainWindow):
     log_line = Signal(str)
     live_poll_done = Signal(str, str, object, str, str, object)
+    desktop_update_done = Signal(object, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -152,9 +154,11 @@ class MainWindow(QMainWindow):
         self._launcher_process = None
         self._launcher_log_thread: threading.Thread | None = None
         self._live_poll_lock = threading.Lock()
+        self._desktop_update_lock = threading.Lock()
         self._launch_targets: list[LaunchTargetInfo] = []
         self._last_launcher_exit_code: int | None = None
         self._cached_listener: tuple[int, str] | None = None
+        self._desktop_update_release: dict | None = None
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -229,8 +233,19 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 18px; font-weight: 700; color: #f1f5f9; border: none;")
         self._header_version = QLabel("")
         self._header_version.setStyleSheet("font-size: 12px; color: #94a3b8; border: none;")
+        self._header_desktop_update = QPushButton("")
+        self._header_desktop_update.hide()
+        self._header_desktop_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header_desktop_update.setStyleSheet(
+            "QPushButton { font-size: 11px; font-weight: 600; color: #1d4ed8;"
+            " background: #dbeafe; border: 1px solid #93c5fd; border-radius: 6px;"
+            " padding: 4px 10px; }"
+            "QPushButton:hover { background: #bfdbfe; }"
+        )
+        self._header_desktop_update.clicked.connect(self._open_desktop_update_release)
         header_layout.addWidget(title)
         header_layout.addWidget(self._header_version)
+        header_layout.addWidget(self._header_desktop_update)
         header_layout.addStretch(1)
         self._header_poll_time = QLabel("")
         self._header_poll_time.setStyleSheet("font-size: 11px; color: #64748b; border: none;")
@@ -780,6 +795,7 @@ class MainWindow(QMainWindow):
         self.btn_copy_logs.clicked.connect(self._copy_log_selection)
         self.log_line.connect(self._append)
         self.live_poll_done.connect(self._apply_live_poll)
+        self.desktop_update_done.connect(self._apply_desktop_update_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
 
         self.setStyleSheet(MAIN_WINDOW_QSS)
@@ -796,6 +812,10 @@ class MainWindow(QMainWindow):
         self._live_timer = QTimer(self)
         self._live_timer.timeout.connect(self._schedule_live_poll)
         self._live_timer.start(4000)
+        self._desktop_update_timer = QTimer(self)
+        self._desktop_update_timer.timeout.connect(self._schedule_desktop_update_poll)
+        self._desktop_update_timer.start(30 * 60 * 1000)
+        QTimer.singleShot(1500, self._schedule_desktop_update_poll)
 
     # Color mapping for desktop [tag] prefixes and Python logging levels.
     _LOG_COLORS: dict[str, str] = {
@@ -1918,6 +1938,53 @@ class MainWindow(QMainWindow):
         from cockpitdecks_desktop import __version__
 
         return __version__
+
+    def _schedule_desktop_update_poll(self) -> None:
+        if not self._desktop_update_lock.acquire(blocking=False):
+            return
+
+        def work() -> None:
+            try:
+                current_tag = f"v{self._desktop_app_version()}"
+                try:
+                    release = gh.latest_desktop_release()
+                except Exception as exc:
+                    self.desktop_update_done.emit(None, f"[desktop] update check failed: {exc}")
+                    return
+                if release is None:
+                    self.desktop_update_done.emit(None, "")
+                    return
+                latest_tag = release.get("tag_name", "")
+                if gh.version_sort_key(latest_tag) > gh.version_sort_key(current_tag):
+                    self.desktop_update_done.emit(release, f"[desktop] update available: {latest_tag}")
+                else:
+                    self.desktop_update_done.emit(None, "")
+            finally:
+                self._desktop_update_lock.release()
+
+        threading.Thread(target=work, name="DesktopUpdatePoll", daemon=True).start()
+
+    def _apply_desktop_update_poll(self, release: dict | None, log_message: str) -> None:
+        self._desktop_update_release = release
+        if log_message:
+            self._append(log_message)
+        if release is None:
+            self._header_desktop_update.hide()
+            self._header_desktop_update.setToolTip("")
+            return
+        tag = release.get("tag_name", "")
+        self._header_desktop_update.setText(f"Desktop {tag} available")
+        self._header_desktop_update.setToolTip("Open the Cockpitdecks Desktop release page in your browser.")
+        self._header_desktop_update.show()
+
+    def _open_desktop_update_release(self) -> None:
+        release = self._desktop_update_release
+        if not release:
+            return
+        url = release.get("html_url") or ""
+        if not url:
+            return
+        QDesktopServices.openUrl(QUrl(url))
 
     @staticmethod
     def _style_status_value(label: QLabel, text: str) -> None:

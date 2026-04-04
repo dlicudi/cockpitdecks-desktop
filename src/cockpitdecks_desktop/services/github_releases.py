@@ -1,4 +1,4 @@
-"""GitHub releases service — fetch, download, and install the cockpitdecks binary."""
+"""GitHub releases service — fetch, download, and install GitHub release assets."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Callable
 
 GITHUB_REPO = "dlicudi/cockpitdecks"
+DESKTOP_GITHUB_REPO = "dlicudi/cockpitdecks-desktop"
 ASSET_PLATFORM = "windows-x64" if sys.platform == "win32" else "macos-arm64"
+DESKTOP_ASSET_PLATFORM = ASSET_PLATFORM
 if sys.platform == "win32":
     INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "CockpitdecksDesktop" / "bin"
 elif sys.platform == "darwin":
@@ -38,6 +40,25 @@ def fetch_releases(repo: str = GITHUB_REPO) -> list[dict]:
     req = urllib.request.Request(url, headers=_API_HEADERS)
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read())
+
+
+def version_sort_key(tag: str) -> tuple:
+    """Parse a v-prefixed semver-ish tag into a sortable tuple."""
+    tag = tag.removeprefix("v")
+    parts = tag.split("-", 1)
+    base = parts[0]
+    pre = parts[1] if len(parts) > 1 else ""
+    try:
+        base_tuple = tuple(int(x) for x in base.split("."))
+    except ValueError:
+        base_tuple = (0,)
+    if pre:
+        pre_parts = pre.split(".")
+        pre_name = pre_parts[0]
+        pre_num = int(pre_parts[1]) if len(pre_parts) > 1 and pre_parts[1].isdigit() else 0
+        pre_order = {"alpha": 0, "beta": 1, "rc": 2}.get(pre_name, -1)
+        return base_tuple + (0, pre_order, pre_num)
+    return base_tuple + (1, 0, 0)
 
 
 def _binary_path_for_tag(tag: str) -> Path:
@@ -117,6 +138,26 @@ def _find_asset(release: dict, suffix: str) -> dict | None:
 def _find_binary_asset(release: dict) -> dict | None:
     suffix = ".zip" if sys.platform == "win32" else ".tar.gz"
     return _find_asset(release, suffix)
+
+
+def _find_desktop_asset(release: dict, suffix: str) -> dict | None:
+    tag = release["tag_name"]
+    name = f"cockpitdecks-desktop-{DESKTOP_ASSET_PLATFORM}-{tag}{suffix}"
+    for asset in release.get("assets", []):
+        if asset["name"] == name:
+            return asset
+    return None
+
+
+def latest_desktop_release(repo: str = DESKTOP_GITHUB_REPO) -> dict | None:
+    """Return the newest cockpitdecks-desktop release that has a matching platform asset."""
+    suffix = ".zip"
+    releases = fetch_releases(repo=repo)
+    candidates = [r for r in releases if _find_desktop_asset(r, suffix) is not None]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda r: version_sort_key(r.get("tag_name", "")), reverse=True)
+    return candidates[0]
 
 
 class DownloadCancelledError(Exception):
