@@ -185,6 +185,10 @@ class DesktopUpdateDialog(QDialog):
 
         body = (release.get("body") or "").strip()
         body = re.sub(r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE).strip()
+        self._asset = next(
+            (asset for asset in release.get("assets", []) if asset.get("name", "").endswith(".zip") and gh.DESKTOP_ASSET_PLATFORM in asset.get("name", "")),
+            None,
+        )
 
         root = QVBoxLayout(self)
         root.setSpacing(10)
@@ -204,6 +208,11 @@ class DesktopUpdateDialog(QDialog):
         self._status.setStyleSheet("color: #64748b; font-size: 12px;")
         root.addWidget(self._status)
 
+        meta = QLabel(self._meta_text())
+        meta.setWordWrap(True)
+        meta.setStyleSheet("color: #475569; font-size: 11px;")
+        root.addWidget(meta)
+
         self._notes = QTextEdit()
         self._notes.setReadOnly(True)
         self._notes.setMarkdown(body or "_No release notes provided._")
@@ -219,6 +228,11 @@ class DesktopUpdateDialog(QDialog):
         self._reveal_btn.clicked.connect(self._reveal_download)
         self._reveal_btn.setEnabled(False)
         actions.addWidget(self._reveal_btn)
+
+        self._open_archive_btn = QPushButton("Open Archive")
+        self._open_archive_btn.clicked.connect(self._open_archive)
+        self._open_archive_btn.setEnabled(False)
+        actions.addWidget(self._open_archive_btn)
 
         open_btn = QPushButton("Open Release Page")
         open_btn.clicked.connect(self._open_release_page)
@@ -241,6 +255,12 @@ class DesktopUpdateDialog(QDialog):
             f"A newer Cockpitdecks Desktop build is available. "
             f"Download it to {dest}, then replace your current app with the downloaded build."
         )
+
+    def _meta_text(self) -> str:
+        name = self._asset.get("name", "Unknown asset") if self._asset else "No matching platform asset found"
+        size = self._asset.get("size", 0) if self._asset else 0
+        size_mb = f"{size / (1024 * 1024):.1f} MB" if size else "unknown size"
+        return f"Asset: {name} | Size: {size_mb} | Download folder: {gh.desktop_download_dir()}"
 
     def _start_download(self) -> None:
         if self._download_thread is not None:
@@ -277,12 +297,25 @@ class DesktopUpdateDialog(QDialog):
             return
         self._downloaded_path = Path(path)
         self._reveal_btn.setEnabled(True)
+        self._open_archive_btn.setEnabled(True)
         self._progress.setValue(100)
-        self._status.setText(f"Downloaded to {self._downloaded_path}")
+        if sys.platform == "win32":
+            self._status.setText(
+                f"Downloaded to {self._downloaded_path}. Next: extract the zip and launch the new app from the extracted folder."
+            )
+        else:
+            self._status.setText(
+                f"Downloaded to {self._downloaded_path}. Next: replace your current app with the downloaded build."
+            )
 
     def _reveal_download(self) -> None:
         target = self._downloaded_path.parent if self._downloaded_path else gh.desktop_download_dir()
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
+    def _open_archive(self) -> None:
+        if self._downloaded_path is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._downloaded_path)))
 
     def _open_release_page(self) -> None:
         url = self._release.get("html_url") or ""
@@ -397,6 +430,15 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(title)
         header_layout.addWidget(self._header_version)
         header_layout.addWidget(self._header_desktop_update)
+        self._header_desktop_check = QPushButton("Check updates")
+        self._header_desktop_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header_desktop_check.setStyleSheet(
+            "QPushButton { font-size: 11px; color: #cbd5e1; background: transparent;"
+            " border: 1px solid #475569; border-radius: 6px; padding: 4px 10px; }"
+            "QPushButton:hover { background: #334155; }"
+        )
+        self._header_desktop_check.clicked.connect(self._schedule_desktop_update_poll)
+        header_layout.addWidget(self._header_desktop_check)
         header_layout.addStretch(1)
         self._header_poll_time = QLabel("")
         self._header_poll_time.setStyleSheet("font-size: 11px; color: #64748b; border: none;")
