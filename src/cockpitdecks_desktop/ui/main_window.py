@@ -1644,8 +1644,13 @@ class MainWindow(QMainWindow):
             widget.setCursor(Qt.CursorShape.PointingHandCursor)
             path = info.path
             widget.mousePressEvent = lambda _ev, p=path: self._on_deck_card_clicked(p)
-            self._deck_grid_layout.addWidget(widget, grid_row, col)
+            self._deck_grid_layout.addWidget(widget, grid_row, col, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         grid_row += 1
+
+        for col in range(columns):
+            self._deck_grid_layout.setColumnStretch(col, 0)
+        if columns < 4:
+            self._deck_grid_layout.setColumnStretch(columns, 1)
 
         # Pushes cards to top when there are few entries
         self._deck_grid_layout.setRowStretch(grid_row, 1)
