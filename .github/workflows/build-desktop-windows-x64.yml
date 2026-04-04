@@ -63,7 +63,7 @@ jobs:
           python -m venv .venv
           . .venv/Scripts/activate
           python -m pip install --upgrade pip setuptools wheel hatchling
-          python -m pip install pyinstaller
+          python -m pip install pyinstaller pillow
           python -m pip install -e .
           .venv/Scripts/pyinstaller.exe --clean packaging/pyinstaller/desktop.spec
 
