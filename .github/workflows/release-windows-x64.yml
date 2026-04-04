@@ -1,0 +1,139 @@
+name: Release Cockpitdecks Desktop Windows x64
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish (e.g. v0.3.1-beta.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cockpitdecks-desktop-windows-x64-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout cockpitdecks-desktop
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        env:
+          MANUAL_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${MANUAL_RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
+          if [[ -z "${RELEASE_TAG}" ]]; then
+            echo "::error::Unable to determine release tag"
+            exit 1
+          fi
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
+          {
+            echo "### Desktop release configuration"
+            echo
+            echo "- release tag: \`${RELEASE_TAG}\`"
+            echo "- runner architecture: \`${PROCESSOR_ARCHITECTURE:-unknown}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml', 'packaging/pyinstaller/desktop.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Build desktop app
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          . .venv/Scripts/activate
+          python -m pip install --upgrade pip setuptools wheel hatchling
+          python -m pip install pyinstaller pillow
+          python -m pip install -e .
+          .venv/Scripts/pyinstaller.exe --clean packaging/pyinstaller/desktop.spec
+
+      - name: Verify desktop app
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/cockpitdecks-desktop/cockpitdecks-desktop.exe")) { throw "dist/cockpitdecks-desktop/cockpitdecks-desktop.exe not found" }
+
+      - name: Package release artifact
+        shell: pwsh
+        run: |
+          $artifactBase = "cockpitdecks-desktop-windows-x64-$env:RELEASE_TAG"
+          Remove-Item -Recurse -Force $artifactBase -ErrorAction SilentlyContinue
+          Remove-Item -Force "$artifactBase.zip" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $artifactBase | Out-Null
+          Copy-Item "dist/cockpitdecks-desktop/*" $artifactBase -Recurse -Force
+          $exeHash = (Get-FileHash "$artifactBase/cockpitdecks-desktop.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$exeHash *cockpitdecks-desktop.exe" | Set-Content "$artifactBase/cockpitdecks-desktop.exe.sha256"
+          Compress-Archive -Path "$artifactBase/*" -DestinationPath "$artifactBase.zip" -Force
+          $zipHash = (Get-FileHash "$artifactBase.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash *$artifactBase.zip" | Set-Content "$artifactBase.zip.sha256"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cockpitdecks-desktop-windows-x64-${{ env.RELEASE_TAG }}
+          path: |
+            cockpitdecks-desktop-windows-x64-${{ env.RELEASE_TAG }}.zip
+            cockpitdecks-desktop-windows-x64-${{ env.RELEASE_TAG }}.zip.sha256
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${RELEASE_TAG}$" | head -1) || true
+          {
+            echo "### Cockpitdecks Desktop ${RELEASE_TAG}"
+            echo ""
+            echo "Windows x64 desktop app."
+            echo ""
+            if [[ -n "${PREV_TAG}" ]]; then
+              echo "#### Changes since ${PREV_TAG}"
+              echo ""
+              git log "${PREV_TAG}..${RELEASE_TAG}" --pretty=format:"- %s" --no-merges 2>/dev/null || true
+              echo ""
+              echo ""
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${RELEASE_TAG}"
+            fi
+          } > release-notes-windows.md
+
+      - name: Publish GitHub release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_BASENAME="cockpitdecks-desktop-windows-x64-${RELEASE_TAG}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" \
+              --clobber \
+              "${ARTIFACT_BASENAME}.zip" \
+              "${ARTIFACT_BASENAME}.zip.sha256"
+          else
+            gh release create "${RELEASE_TAG}" \
+              --title "${RELEASE_TAG}" \
+              --notes-file release-notes-windows.md \
+              --target "${{ github.sha }}" \
+              "${ARTIFACT_BASENAME}.zip" \
+              "${ARTIFACT_BASENAME}.zip.sha256"
+          fi
