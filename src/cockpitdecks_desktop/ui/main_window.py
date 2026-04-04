@@ -1791,6 +1791,7 @@ class MainWindow(QMainWindow):
 
     def _on_pack_installed(self, tag: str) -> None:
         """Called after a deck pack is installed from the Deck Packs tab."""
+        self._ensure_search_root(self._managed_decks_dir())
         self._append(f"[packs] deck pack {tag} installed")
         self._refresh_pack_views()
 
