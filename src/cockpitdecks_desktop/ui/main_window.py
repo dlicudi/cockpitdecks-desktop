@@ -2580,20 +2580,41 @@ class MainWindow(QMainWindow):
             return False
         return True
 
+    def _terminate_launcher_process(self, action: str) -> None:
+        if not self._launcher_is_running():
+            return
+        assert self._launcher_process is not None
+        proc = self._launcher_process
+        self._append(f"[launch] {action} cockpitdecks (pid={proc.pid})")
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                details = result.stdout.strip() or result.stderr.strip() or f"exit={result.returncode}"
+                self._append(f"[launch] taskkill failed for pid {proc.pid}: {details}")
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._append(f"[launch] taskkill did not reap pid {proc.pid} promptly")
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            self._append(f"[launch] {action} timeout, sending kill")
+            proc.kill()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+
     def stop_cockpitdecks(self) -> None:
         if self._launcher_is_running():
-            assert self._launcher_process is not None
-            self._append(f"[launch] stopping cockpitdecks (pid={self._launcher_process.pid})")
-            self._launcher_process.terminate()
-            try:
-                self._launcher_process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                self._append("[launch] stop timeout, sending kill")
-                self._launcher_process.kill()
-                try:
-                    self._launcher_process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
+            self._terminate_launcher_process("stopping")
         elif self._kill_port_listener():
             pass  # orphan handled
         else:
@@ -2604,17 +2625,7 @@ class MainWindow(QMainWindow):
         self._append("[launch] restart requested")
         if self._launcher_is_running():
             self._append("[launch] restarting cockpitdecks...")
-            assert self._launcher_process is not None
-            self._launcher_process.terminate()
-            try:
-                self._launcher_process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                self._append("[launch] restart timeout on stop, sending kill")
-                self._launcher_process.kill()
-                try:
-                    self._launcher_process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
+            self._terminate_launcher_process("stopping")
         elif self._kill_port_listener():
             import time
 
@@ -2675,13 +2686,5 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._launcher_is_running():
-            self._launcher_process.terminate()
-            try:
-                self._launcher_process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                self._launcher_process.kill()
-                try:
-                    self._launcher_process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
+            self._terminate_launcher_process("stopping")
         super().closeEvent(event)
