@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import urllib.request
+from urllib.error import HTTPError, URLError
 from pathlib import Path
 from typing import Callable
 
@@ -15,13 +17,35 @@ _API_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+_TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _urlopen_with_retry(req: urllib.request.Request, *, timeout: int, attempts: int = 3):
+    delay = 1.0
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except HTTPError as exc:
+            last_error = exc
+            if exc.code not in _TRANSIENT_HTTP_STATUSES or attempt == attempts:
+                raise
+        except URLError as exc:
+            last_error = exc
+            if attempt == attempts:
+                raise
+        time.sleep(delay)
+        delay *= 2
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("unexpected retry state")
 
 
 def fetch_readme(pack_id: str, repo: str = GITHUB_REPO) -> str:
     """Fetch README.md for a pack from GitHub raw content. Raises on failure."""
     url = f"https://raw.githubusercontent.com/{repo}/main/decks/{pack_id}/README.md"
     req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with _urlopen_with_retry(req, timeout=10) as resp:
         return resp.read().decode("utf-8")
 
 
@@ -29,7 +53,7 @@ def fetch_pack_releases(repo: str = GITHUB_REPO) -> list[dict]:
     """Fetch all releases from the cockpitdecks-configs GitHub repo."""
     url = f"{_API_BASE}/repos/{repo}/releases"
     req = urllib.request.Request(url, headers=_API_HEADERS)
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with _urlopen_with_retry(req, timeout=10) as resp:
         return json.loads(resp.read())
 
 
@@ -59,7 +83,7 @@ def download_zip(
     log(f"[packs] downloading {name} ({asset.get('size', 0):,} bytes)")
 
     req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with _urlopen_with_retry(req, timeout=120) as resp:
         total = int(resp.headers.get("Content-Length", 0))
         done = 0
         with open(dest, "wb") as fh:

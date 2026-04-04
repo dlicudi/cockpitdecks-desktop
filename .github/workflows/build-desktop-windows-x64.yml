@@ -72,18 +72,18 @@ jobs:
         run: |
           if (-not (Test-Path "dist/cockpitdecks-desktop/cockpitdecks-desktop.exe")) { throw "dist/cockpitdecks-desktop/cockpitdecks-desktop.exe not found" }
 
-      - name: Package build artifact
+      - name: Stage build artifact
         shell: pwsh
         run: |
           $artifactBase = "cockpitdecks-desktop-windows-x64-$env:BUILD_ID"
-          Compress-Archive -Path "dist/cockpitdecks-desktop/*" -DestinationPath "$artifactBase.zip" -Force
-          $hash = (Get-FileHash "$artifactBase.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash *$artifactBase.zip" | Set-Content "$artifactBase.zip.sha256"
+          Remove-Item -Recurse -Force $artifactBase -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $artifactBase | Out-Null
+          Copy-Item "dist/cockpitdecks-desktop/*" $artifactBase -Recurse -Force
+          $exeHash = (Get-FileHash "$artifactBase/cockpitdecks-desktop.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$exeHash *cockpitdecks-desktop.exe" | Set-Content "$artifactBase/cockpitdecks-desktop.exe.sha256"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}
-          path: |
-            cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}.zip
-            cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}.zip.sha256
+          path: cockpitdecks-desktop-windows-x64-${{ env.BUILD_ID }}
