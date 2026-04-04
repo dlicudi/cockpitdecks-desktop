@@ -462,12 +462,18 @@ class MainWindow(QMainWindow):
         self.btn_desktop_update_check = QPushButton("Check for Updates")
         self.btn_desktop_update_check.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_desktop_update_check.clicked.connect(self._check_desktop_updates_now)
+        self.lbl_desktop_update_status = QLabel("Not checked")
+        self.lbl_desktop_update_status.setStyleSheet(
+            "font-size: 11px; color: #64748b; background: #ffffff; border: 1px solid #e2e8f0;"
+            " border-radius: 10px; padding: 4px 10px;"
+        )
 
         ab_layout.addWidget(self.btn_start)
         ab_layout.addWidget(self.btn_restart)
         ab_layout.addWidget(self.btn_stop)
         ab_layout.addWidget(self.btn_reload)
         ab_layout.addWidget(self.btn_desktop_update_check)
+        ab_layout.addWidget(self.lbl_desktop_update_status)
         ab_layout.addStretch(1)
 
         # ════════════════════════════════════════
@@ -2132,6 +2138,11 @@ class MainWindow(QMainWindow):
 
     def _check_desktop_updates_now(self) -> None:
         self._manual_desktop_update_check = True
+        self.lbl_desktop_update_status.setText("Checking…")
+        self.lbl_desktop_update_status.setStyleSheet(
+            "font-size: 11px; color: #1d4ed8; background: #dbeafe; border: 1px solid #93c5fd;"
+            " border-radius: 10px; padding: 4px 10px;"
+        )
         self.statusBar().showMessage("Checking for Cockpitdecks Desktop updates…", 4000)
         self._append("[desktop] checking for updates…")
         self._schedule_desktop_update_poll()
@@ -2172,14 +2183,29 @@ class MainWindow(QMainWindow):
             self._header_desktop_update.setToolTip("")
             if manual:
                 if log_message and "failed" in log_message.lower():
+                    self.lbl_desktop_update_status.setText("Check failed")
+                    self.lbl_desktop_update_status.setStyleSheet(
+                        "font-size: 11px; color: #b91c1c; background: #fee2e2; border: 1px solid #fca5a5;"
+                        " border-radius: 10px; padding: 4px 10px;"
+                    )
                     self.statusBar().showMessage(log_message, 6000)
                 else:
+                    self.lbl_desktop_update_status.setText("Up to date")
+                    self.lbl_desktop_update_status.setStyleSheet(
+                        "font-size: 11px; color: #166534; background: #dcfce7; border: 1px solid #86efac;"
+                        " border-radius: 10px; padding: 4px 10px;"
+                    )
                     self.statusBar().showMessage("Cockpitdecks Desktop is up to date.", 5000)
             return
         tag = release.get("tag_name", "")
         self._header_desktop_update.setText(f"Desktop {tag} available")
         self._header_desktop_update.setToolTip("Download or view the newer Cockpitdecks Desktop release.")
         self._header_desktop_update.show()
+        self.lbl_desktop_update_status.setText(f"Update available: {tag}")
+        self.lbl_desktop_update_status.setStyleSheet(
+            "font-size: 11px; color: #1d4ed8; background: #dbeafe; border: 1px solid #93c5fd;"
+            " border-radius: 10px; padding: 4px 10px;"
+        )
         if manual:
             self.statusBar().showMessage(f"Desktop update available: {tag}", 6000)
 
