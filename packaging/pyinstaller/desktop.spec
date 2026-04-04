@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+import certifi
 
 hiddenimports = [
     "PySide6.QtCore",
@@ -29,6 +30,8 @@ if ICON_PNG.exists():
     datas.append((str(ICON_PNG), "cockpitdecks_desktop/resources"))
 else:
     print(f"[desktop.spec] warning: app icon not found at {ICON_PNG}")
+
+datas.append((certifi.where(), "."))
 
 # Read version from package at build time
 import importlib.util

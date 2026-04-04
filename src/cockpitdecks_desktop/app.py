@@ -9,6 +9,7 @@ import traceback
 from PySide6.QtWidgets import QApplication
 
 from cockpitdecks_desktop.icon_loader import load_app_icon
+from cockpitdecks_desktop.services.ssl_certs import configure_default_ssl_ca_bundle
 from cockpitdecks_desktop.services.desktop_settings import settings_path
 from cockpitdecks_desktop.ui.main_window import MainWindow
 
@@ -53,6 +54,8 @@ def _write_crash_log(exc: BaseException) -> Path | None:
 
 def main() -> int:
     try:
+        configure_default_ssl_ca_bundle()
+
         if sys.platform == "darwin":
             _macos_set_foreground_app()
 
