@@ -2424,7 +2424,6 @@ class MainWindow(QMainWindow):
         self.info_launcher.setToolTip("\n\n".join(tip_lines))
 
         self._refresh_status_value_styles()
-        self._refresh_diagnostics_panel()
         self._refresh_start_stop_buttons()
         self._schedule_live_poll()
 
@@ -2516,7 +2515,7 @@ class MainWindow(QMainWindow):
              f"Cockpitdecks binary — {'found' if launcher.exists() else 'missing'}")
 
         wport = self._web_listen_port()
-        listener = self._cockpit_web_port_listener()
+        listener = self._cached_listener
         cockpit_running = self._launcher_is_running()
         if listener is not None:
             if cockpit_running:
