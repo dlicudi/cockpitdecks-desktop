@@ -343,6 +343,7 @@ class MainWindow(QMainWindow):
         self._last_launcher_exit_code: int | None = None
         self._cached_listener: tuple[int, str] | None = None
         self._desktop_update_release: dict | None = None
+        self._manual_desktop_update_check = False
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -430,15 +431,6 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(title)
         header_layout.addWidget(self._header_version)
         header_layout.addWidget(self._header_desktop_update)
-        self._header_desktop_check = QPushButton("Check updates")
-        self._header_desktop_check.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._header_desktop_check.setStyleSheet(
-            "QPushButton { font-size: 11px; color: #cbd5e1; background: transparent;"
-            " border: 1px solid #475569; border-radius: 6px; padding: 4px 10px; }"
-            "QPushButton:hover { background: #334155; }"
-        )
-        self._header_desktop_check.clicked.connect(self._schedule_desktop_update_poll)
-        header_layout.addWidget(self._header_desktop_check)
         header_layout.addStretch(1)
         self._header_poll_time = QLabel("")
         self._header_poll_time.setStyleSheet("font-size: 11px; color: #64748b; border: none;")
@@ -467,10 +459,15 @@ class MainWindow(QMainWindow):
         for b in (self.btn_start, self.btn_restart, self.btn_stop, self.btn_reload):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
 
+        self.btn_desktop_update_check = QPushButton("Check Desktop Updates")
+        self.btn_desktop_update_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_desktop_update_check.clicked.connect(self._check_desktop_updates_now)
+
         ab_layout.addWidget(self.btn_start)
         ab_layout.addWidget(self.btn_restart)
         ab_layout.addWidget(self.btn_stop)
         ab_layout.addWidget(self.btn_reload)
+        ab_layout.addWidget(self.btn_desktop_update_check)
         ab_layout.addStretch(1)
 
         # ════════════════════════════════════════
@@ -2133,6 +2130,12 @@ class MainWindow(QMainWindow):
 
         return __version__
 
+    def _check_desktop_updates_now(self) -> None:
+        self._manual_desktop_update_check = True
+        self.statusBar().showMessage("Checking for Cockpitdecks Desktop updates…", 4000)
+        self._append("[desktop] checking for updates…")
+        self._schedule_desktop_update_poll()
+
     def _schedule_desktop_update_poll(self) -> None:
         if not self._desktop_update_lock.acquire(blocking=False):
             return
@@ -2159,17 +2162,26 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, name="DesktopUpdatePoll", daemon=True).start()
 
     def _apply_desktop_update_poll(self, release: dict | None, log_message: str) -> None:
+        manual = self._manual_desktop_update_check
+        self._manual_desktop_update_check = False
         self._desktop_update_release = release
         if log_message:
             self._append(log_message)
         if release is None:
             self._header_desktop_update.hide()
             self._header_desktop_update.setToolTip("")
+            if manual:
+                if log_message and "failed" in log_message.lower():
+                    self.statusBar().showMessage(log_message, 6000)
+                else:
+                    self.statusBar().showMessage("Cockpitdecks Desktop is up to date.", 5000)
             return
         tag = release.get("tag_name", "")
         self._header_desktop_update.setText(f"Desktop {tag} available")
         self._header_desktop_update.setToolTip("Download or view the newer Cockpitdecks Desktop release.")
         self._header_desktop_update.show()
+        if manual:
+            self.statusBar().showMessage(f"Desktop update available: {tag}", 6000)
 
     def _open_desktop_update_release(self) -> None:
         release = self._desktop_update_release
