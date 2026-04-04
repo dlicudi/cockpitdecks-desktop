@@ -266,8 +266,8 @@ class _ReleaseRow(QFrame):
         if self._is_active:
             self._btn.setText("✓ Active")
             self._btn.setEnabled(False)
-            self._uninstall_btn.setVisible(True)
-            self._uninstall_btn.setEnabled(True)
+            self._uninstall_btn.setVisible(False)
+            self._uninstall_btn.setEnabled(False)
             return
         if self._is_installed:
             self._btn.setText("Use Installed")
@@ -478,7 +478,13 @@ class ReleasesTab(QWidget):
         self.installed.emit(release["tag_name"])
 
     def _on_activated(self, tag: str) -> None:
-        gh.activate_installed_version(tag)
+        try:
+            gh.activate_installed_version(tag)
+        except Exception as exc:
+            self._fetch_status.setText(f"Failed to activate installed release: {exc}")
+            self._fetch_status.setStyleSheet("color: #b91c1c; font-size: 12px;")
+            self.log_line.emit(f"[releases] activate failed for {tag}: {exc}")
+            return
         active_tag = gh.installed_version()
         installed_tags = set(gh.installed_versions().keys())
         for card in self._cards:
@@ -488,7 +494,13 @@ class ReleasesTab(QWidget):
         self.installed.emit(tag)
 
     def _on_uninstalled(self, tag: str) -> None:
-        gh.remove_installed_version(tag)
+        try:
+            gh.remove_installed_version(tag)
+        except Exception as exc:
+            self._fetch_status.setText(f"Failed to remove installed release: {exc}")
+            self._fetch_status.setStyleSheet("color: #b91c1c; font-size: 12px;")
+            self.log_line.emit(f"[releases] remove failed for {tag}: {exc}")
+            return
         active_tag = gh.installed_version()
         installed_tags = set(gh.installed_versions().keys())
         for card in self._cards:
