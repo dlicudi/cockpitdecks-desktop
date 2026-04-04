@@ -472,9 +472,9 @@ class MainWindow(QMainWindow):
         ab_layout.addWidget(self.btn_restart)
         ab_layout.addWidget(self.btn_stop)
         ab_layout.addWidget(self.btn_reload)
-        ab_layout.addWidget(self.btn_desktop_update_check)
-        ab_layout.addWidget(self.lbl_desktop_update_status)
         ab_layout.addStretch(1)
+        ab_layout.addWidget(self.lbl_desktop_update_status)
+        ab_layout.addWidget(self.btn_desktop_update_check)
 
         # ════════════════════════════════════════
         #  CONNECTIVITY CARD (left)
