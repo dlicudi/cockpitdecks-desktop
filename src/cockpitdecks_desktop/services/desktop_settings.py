@@ -7,8 +7,10 @@ preferences remain in settings.json.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -71,8 +73,39 @@ def _normalize_port(raw: str, default: str) -> int:
         return int(default)
 
 
-def _split_paths(raw: str) -> list[str]:
-    return [chunk.strip() for chunk in str(raw or "").replace(";", ":").split(":") if chunk.strip()]
+def _split_paths(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        out: list[str] = []
+        for item in raw:
+            s = str(item or "").strip()
+            if s:
+                out.append(s)
+        return out
+    text = str(raw).strip()
+    if not text:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, (list, tuple)):
+            return _split_paths(parsed)
+    if sys.platform == "win32":
+        parts = [chunk.strip() for chunk in text.split(";") if chunk.strip()]
+        if len(parts) > 1:
+            return parts
+        m = re.match(r"^\['([A-Za-z])',\s*'\\(.*)'\]$", text)
+        if m:
+            return [f"{m.group(1)}:\\{m.group(2)}"]
+        return [text]
+    return [chunk.strip() for chunk in text.replace(";", ":").split(":") if chunk.strip()]
+
+
+def _join_paths(paths: list[str]) -> str:
+    return os.pathsep.join(str(p).strip() for p in paths if str(p).strip())
 
 
 def _load_desktop_only() -> dict[str, str]:
@@ -112,7 +145,7 @@ def _flatten_runtime(raw: dict) -> dict[str, str]:
     xplane_api = raw.get("xplane_api") if isinstance(raw.get("xplane_api"), dict) else {}
     server = raw.get("cockpitdecks_server") if isinstance(raw.get("cockpitdecks_server"), dict) else {}
     return {
-        "COCKPITDECKS_PATH": ":".join(_split_paths(raw.get("deck_paths"))),
+        "COCKPITDECKS_PATH": _join_paths(_split_paths(raw.get("deck_paths"))),
         "COCKPITDECKS_TARGET": str(raw.get("target") or "").strip(),
         "SIMULATOR_HOST": str(raw.get("simulator_host") or "").strip(),
         "API_HOST": str(xplane_api.get("host") or SHARED_DEFAULTS["API_HOST"]).strip() or SHARED_DEFAULTS["API_HOST"],

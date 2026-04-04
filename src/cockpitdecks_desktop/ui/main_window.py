@@ -41,6 +41,8 @@ from PySide6.QtWidgets import (
 
 from cockpitdecks_desktop.services.desktop_settings import (
     cockpit_web_base,
+    _join_paths,
+    _split_paths,
     launcher_binary_path,
     load as load_desktop_settings,
     launch_env_overlay,
@@ -1343,7 +1345,7 @@ class MainWindow(QMainWindow):
     def _normalize_cd_path_entries(self, raw: str) -> list[str]:
         out: list[str] = []
         seen: set[str] = set()
-        for chunk in raw.replace(";", ":").split(":"):
+        for chunk in _split_paths(raw):
             s = chunk.strip()
             if not s:
                 continue
@@ -1360,7 +1362,7 @@ class MainWindow(QMainWindow):
         key = _path_key(str(root))
         if key not in {_path_key(p) for p in paths}:
             paths.append(str(root))
-            save_desktop_settings(self._settings_with_updates(COCKPITDECKS_PATH=":".join(paths)))
+            save_desktop_settings(self._settings_with_updates(COCKPITDECKS_PATH=_join_paths(paths)))
             self.settings_form.reload_from_disk()
 
     def _extract_manifest_id(self, manifest_path: Path) -> str:
@@ -1455,7 +1457,7 @@ class MainWindow(QMainWindow):
         raw = (load_desktop_settings().get("COCKPITDECKS_PATH") or "").strip()
         roots: list[Path] = []
         seen: set[str] = set()
-        for chunk in raw.replace(";", ":").split(":"):
+        for chunk in _split_paths(raw):
             s = chunk.strip()
             if not s:
                 continue

@@ -213,7 +213,7 @@ class SettingsFormWidget(QWidget):
 
     def _load_cd_path_list(self, raw: str) -> None:
         self.list_cd_path.clear()
-        for chunk in raw.replace(";", ":").split(":"):
+        for chunk in desktop_settings._split_paths(raw):
             s = chunk.strip()
             if s:
                 self.list_cd_path.addItem(QListWidgetItem(s))
@@ -316,7 +316,7 @@ class SettingsFormWidget(QWidget):
             "COCKPITDECKS_LAUNCHER_PATH":        self.ed_launcher.text().strip(),
             "COCKPITDECKS_LAUNCHER_USE_CUSTOM":  "1" if self.chk_launcher_custom.isChecked() else "0",
             "COCKPITDECKS_LAUNCH_LOG_PATH":      self.ed_launch_log.text().strip(),
-            "COCKPITDECKS_PATH":              ":".join(p for p in paths if p),
+            "COCKPITDECKS_PATH":              desktop_settings._join_paths([p for p in paths if p]),
             "SIMULATOR_HOST":                 self.ed_sim_host.text().strip(),
             "API_HOST":                       self.ed_api_host.text().strip(),
             "API_PORT":                       self.ed_api_port.text().strip(),
