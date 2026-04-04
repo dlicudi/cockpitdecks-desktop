@@ -45,6 +45,7 @@ from cockpitdecks_desktop.services.desktop_settings import (
     load as load_desktop_settings,
     launch_env_overlay,
     managed_decks_dir,
+    runtime_config_path,
     save as save_desktop_settings,
     settings_path,
     xplane_rest_base,
@@ -2081,7 +2082,7 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_settings_saved(self) -> None:
-        self.statusBar().showMessage(f"Settings saved — {settings_path().name}", 4000)
+        self.statusBar().showMessage(f"Settings saved — {runtime_config_path().name} + {settings_path().name}", 4000)
         self._refresh_launch_targets()
         self.refresh_info_panel()
 
@@ -2340,6 +2341,7 @@ class MainWindow(QMainWindow):
             "exported_at": datetime.now().isoformat(timespec="seconds"),
             "desktop_app_version": self._desktop_app_version(),
             "settings_path": str(settings_path()),
+            "runtime_config_path": str(runtime_config_path()),
             "settings": settings,
             "launcher_binary": str(self._resolve_launcher_binary()),
             "launch_target": str(launch_target) if launch_target is not None else "",

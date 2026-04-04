@@ -87,6 +87,15 @@ class SettingsFormWidget(QWidget):
         root.setContentsMargins(20, 12, 20, 20)
         root.setSpacing(0)
 
+        runtime_path = QLabel(f"Runtime source of truth: {desktop_settings.runtime_config_path()}")
+        runtime_path.setTextInteractionFlags(runtime_path.textInteractionFlags() | runtime_path.textInteractionFlags().TextSelectableByMouse)
+        runtime_path.setStyleSheet("font-size: 10px; color: #334155; border: none; margin-bottom: 2px;")
+        root.addWidget(runtime_path)
+        desktop_path = QLabel(f"Desktop UI settings: {desktop_settings.settings_path()}")
+        desktop_path.setTextInteractionFlags(desktop_path.textInteractionFlags() | desktop_path.textInteractionFlags().TextSelectableByMouse)
+        desktop_path.setStyleSheet("font-size: 10px; color: #64748b; border: none; margin-bottom: 8px;")
+        root.addWidget(desktop_path)
+
         # ── Section: Cockpitdecks ──────────────────────────────────────
         root.addWidget(_section_heading("Cockpitdecks"))
 
@@ -131,7 +140,7 @@ class SettingsFormWidget(QWidget):
         root.addLayout(cd_btn_row)
         root.addWidget(_hint(
             "Folders where Cockpitdecks looks for aircraft configs (directories containing "
-            "a deckconfig/ subfolder). Add your cockpitdecks-configs/decks checkout here."
+            "a deckconfig/ subfolder). These values are saved into config.yaml."
         ))
 
         # ── Section: Simulator connection ─────────────────────────────
@@ -153,7 +162,7 @@ class SettingsFormWidget(QWidget):
         root.addWidget(self.ed_sim_host)
         root.addWidget(_hint(
             "Only set Remote simulator host if X-Plane runs on a different machine. "
-            "The API host/port default to 127.0.0.1:8086 for a local install."
+            "These shared runtime values are written to config.yaml for both CLI and Desktop mode."
         ))
 
         # ── Section: Advanced ─────────────────────────────────────────
@@ -170,7 +179,7 @@ class SettingsFormWidget(QWidget):
         root.addWidget(self.ed_web_port)
         root.addWidget(_hint(
             "This app polls Cockpitdecks at this host:port for live status and metrics. "
-            "Must match the Flask port Cockpitdecks binds to (set in its environ.yaml)."
+            "These server values are also written to config.yaml and used by CLI mode."
         ))
 
         root.addWidget(_field_label("Cockpitdecks log file"))
