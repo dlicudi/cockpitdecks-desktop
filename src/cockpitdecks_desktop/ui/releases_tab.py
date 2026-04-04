@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -69,6 +71,40 @@ def _format_size(n: int) -> str:
     if n >= 1024:
         return f"{n / 1024:.0f} KB"
     return f"{n} B"
+
+
+class _TextDialog(QDialog):
+    """Simple dialog showing plain or markdown text."""
+
+    def __init__(self, title: str, content: str, *, markdown: bool = False, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(760, 560)
+        self.setStyleSheet(
+            "QDialog { background: #ffffff; color: #1e293b; }"
+            "QPushButton { padding: 4px 12px; border-radius: 6px; font-size: 12px;"
+            " color: #1e293b; background: #ffffff; border: 1px solid #cbd5e1; }"
+            "QPushButton:hover { background: #f8fafc; }"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        self._text = QTextEdit()
+        self._text.setReadOnly(True)
+        self._text.setStyleSheet(
+            "font-size: 12px; color: #1e293b; background: #ffffff;"
+            " border: 1px solid #e2e8f0; border-radius: 6px;"
+        )
+        if markdown:
+            self._text.setMarkdown(content)
+        else:
+            self._text.setPlainText(content)
+        layout.addWidget(self._text, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
 
 
 class _DownloadWorker(QThread):
@@ -165,6 +201,15 @@ class _ReleaseRow(QFrame):
         self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn.clicked.connect(self._on_primary_action)
         self._actions.addWidget(self._btn)
+        self._notes_btn = QPushButton("Release notes")
+        self._notes_btn.setStyleSheet(
+            "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
+            " color: #0369a1; border: 1px solid #bae6fd; background: #fff; }"
+            "QPushButton:hover { background: #f0f9ff; }"
+        )
+        self._notes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._notes_btn.clicked.connect(self._on_notes)
+        self._actions.addWidget(self._notes_btn)
         self._uninstall_btn = QPushButton("Uninstall")
         self._uninstall_btn.setStyleSheet(
             "QPushButton { padding: 3px 10px; border-radius: 5px; font-size: 11px; min-height: 0;"
@@ -212,34 +257,9 @@ class _ReleaseRow(QFrame):
         self._error_label.hide()
         layout.addWidget(self._error_label)
 
-        # ── Release notes (collapsed, only if meaningful) ───────
         body = release.get("body", "").strip()
         self._has_notes = _has_meaningful_notes(body)
-        if self._has_notes:
-            self._notes_visible = False
-            self._notes_toggle = QPushButton("▶ Release notes")
-            self._notes_toggle.setStyleSheet(
-                "QPushButton { background: transparent; border: none; color: #6b7280; "
-                "font-size: 11px; text-align: left; padding: 0; min-height: 0; }"
-                "QPushButton:hover { color: #374151; }"
-            )
-            self._notes_toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            self._notes_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._notes_toggle.clicked.connect(self._toggle_notes)
-
-            # Strip the trailing changelog link if the body also has other content.
-            display_body = re.sub(
-                r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE
-            ).strip()
-            self._notes_label = QLabel(display_body[:2000])
-            self._notes_label.setWordWrap(True)
-            self._notes_label.setStyleSheet(
-                "color: #6b7280; font-size: 11px; padding: 4px 0 0 12px; border: none; background: transparent;"
-            )
-            self._notes_label.hide()
-
-            layout.addWidget(self._notes_toggle)
-            layout.addWidget(self._notes_label)
+        self._notes_btn.setVisible(self._has_notes)
 
         self._refresh_button()
 
@@ -291,10 +311,16 @@ class _ReleaseRow(QFrame):
         self._apply_frame_style()
         self._refresh_button()
 
-    def _toggle_notes(self) -> None:
-        self._notes_visible = not self._notes_visible
-        self._notes_label.setVisible(self._notes_visible)
-        self._notes_toggle.setText("▼ Release notes" if self._notes_visible else "▶ Release notes")
+    def _release_notes_body(self) -> str:
+        body = (self._release.get("body") or "").strip()
+        return re.sub(
+            r"\n?\s*\*{0,2}Full Changelog\*{0,2}:\s*https?://\S+\s*$", "", body, flags=re.IGNORECASE
+        ).strip()
+
+    def _on_notes(self) -> None:
+        title = f"Release notes — {self._release['tag_name']}"
+        dlg = _TextDialog(title, self._release_notes_body(), markdown=True, parent=self)
+        dlg.exec()
 
     def _on_primary_action(self) -> None:
         if self._installing:
