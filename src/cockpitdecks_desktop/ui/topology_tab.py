@@ -128,6 +128,7 @@ class TopologyTab(QWidget):
         decks: list[dict],
         dataref_rate: str = "",
         ws_rate: str = "",
+        ws_stall_count: int = 0,
         cockpit_web_host: str = "127.0.0.1",
         cockpit_web_port: str = "7777",
     ) -> None:
@@ -178,8 +179,12 @@ class TopologyTab(QWidget):
         node_map["xplane"].status = xplane_status
 
         # xplane-webapi: always present; status mirrors cockpitdecks reachability
-        node_map["xplane_webapi"].subtitle = "WS + REST client"
-        node_map["xplane_webapi"].status = cockpit_status
+        if ws_stall_count > 0:
+            node_map["xplane_webapi"].subtitle = f"WS stalled ({ws_stall_count}x)"
+            node_map["xplane_webapi"].status = "error"
+        else:
+            node_map["xplane_webapi"].subtitle = "WS + REST client"
+            node_map["xplane_webapi"].status = cockpit_status
 
         # ── Deck nodes (rebuilt each time) ────────────────────────────────
         deck_nodes: list[_Node] = []
@@ -228,9 +233,11 @@ class TopologyTab(QWidget):
             return "neutral"
 
         xp_metric = f"{dataref_rate} ref/s" if dataref_rate not in ("—", "", None) else ""
+        if ws_stall_count > 0:
+            xp_metric = "NO DATA"
         cockpit_addr = f"{cockpit_web_host or '127.0.0.1'}:{cockpit_web_port or '7777'}"
 
-        ws_status = _es(cockpit_reachable if xplane_reachable else None)
+        ws_status = "error" if ws_stall_count > 0 else _es(cockpit_reachable if xplane_reachable else None)
 
         mode_str = "custom" if launcher_custom else "managed"
         self._edges = [

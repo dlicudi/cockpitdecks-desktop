@@ -2315,6 +2315,15 @@ class MainWindow(QMainWindow):
         if isinstance(dirty_rendered, int) and dirty_rendered == 0 and isinstance(dirty_marks, int) and dirty_marks > 0:
             self._set_diag_warning("Marks arriving without rendered output", "warn")
             return
+        traffic = metrics.get("dataref_traffic") if isinstance(metrics.get("dataref_traffic"), dict) else {}
+        ws_stall_count = traffic.get("ws_stall_count")
+        if isinstance(ws_stall_count, int) and ws_stall_count > 0:
+            self._set_diag_warning(
+                f"WebSocket traffic stalled {ws_stall_count} time{'s' if ws_stall_count != 1 else ''} — "
+                f"X-Plane not pushing dataref updates (try reloading XPPython3 plugins)",
+                "error",
+            )
+            return
         self._set_diag_warning("Queue and render pipeline look stable", "ok")
 
     def _devices_base_url(self) -> str:
@@ -2498,6 +2507,10 @@ class MainWindow(QMainWindow):
             return None
 
         session = self._last_session_info
+        # Extract WS stall count from last metrics
+        _traffic = (self._last_metrics_obj or {}).get("dataref_traffic") if isinstance(self._last_metrics_obj, dict) else {}
+        _ws_stall = _traffic.get("ws_stall_count", 0) if isinstance(_traffic, dict) else 0
+
         self.topology_tab.update_topology(
             launcher_status=launcher_level,
             launcher_label=launcher_health,
@@ -2517,6 +2530,7 @@ class MainWindow(QMainWindow):
             decks=session.decks_detail if session and session.ok else [],
             dataref_rate=self.metric_dataref_rate.text(),
             ws_rate=self.metric_ws_rate.text(),
+            ws_stall_count=_ws_stall if isinstance(_ws_stall, int) else 0,
             cockpit_web_host=settings.get("COCKPIT_WEB_HOST", "127.0.0.1"),
             cockpit_web_port=settings.get("COCKPIT_WEB_PORT", "7777"),
         )
