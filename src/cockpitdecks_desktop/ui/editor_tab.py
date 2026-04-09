@@ -715,7 +715,7 @@ class EditorTab(QWidget):
         self._preview_queue: list[tuple[str, str, str, int]] = []
         self._suggestion_cache: dict[tuple[str, str], list[tuple[str, str]]] = {}
         self._preview_queue_keys: set[str] = set()
-        self._preview_max_inflight = 3
+        self._preview_max_inflight = 8
         self._preview_generation = 0
         self._preview_warm_targets: set[str] = set()
         self._preview_ready_targets: set[str] = set()
@@ -1174,6 +1174,17 @@ class EditorTab(QWidget):
             btn_pick_formula.clicked.connect(lambda _=False, edit=formula_edit: self._open_suggestion_picker_for_formula_edit(edit))
             part_host_layout.addWidget(_field_with_button(formula_edit, btn_pick_formula))
 
+            led_row = QWidget()
+            led_row_layout = QHBoxLayout(led_row)
+            led_row_layout.setContentsMargins(0, 0, 0, 0)
+            led_row_layout.setSpacing(6)
+            led_row_layout.addWidget(QLabel("LED"))
+            led_combo = _NoWheelComboBox()
+            for _led_val, _led_label in (("", "None (text only)"), ("bar", "bar"), ("bars", "bars"), ("block", "block"), ("dot", "dot"), ("lgear", "lgear"), ("led", "led")):
+                led_combo.addItem(_led_label, _led_val)
+            led_row_layout.addWidget(led_combo, 1)
+            part_host_layout.addWidget(led_row)
+
             self.visual_ann_parts_layout.addRow(part_label, part_host)
             self.visual_ann_part_rows.append(
                 {
@@ -1184,6 +1195,7 @@ class EditorTab(QWidget):
                     "color_edit": color_edit,
                     "formula_edit": formula_edit,
                     "pick_button": btn_pick_formula,
+                    "led_combo": led_combo,
                 }
             )
         self.visual_ann_parts_row = self.visual_ann_parts_host
@@ -1257,6 +1269,7 @@ class EditorTab(QWidget):
             row["text_size"].valueChanged.connect(self._apply_visual_fields_to_yaml)
             row["color_edit"].textChanged.connect(self._apply_visual_fields_to_yaml)
             row["formula_edit"].textChanged.connect(self._apply_visual_fields_to_yaml)
+            row["led_combo"].currentIndexChanged.connect(self._apply_visual_fields_to_yaml)
 
         for widget, signal_name in (
             (self.config_home_page_edit, "textChanged"),
@@ -1715,7 +1728,11 @@ class EditorTab(QWidget):
 
         pasted = dict(data)
         pasted["index"] = free_index
-        pasted["name"] = self._unique_button_name(self._button_name(pasted), buttons)
+        new_name = self._unique_button_name(self._button_name(pasted), buttons)
+        if new_name:
+            pasted["name"] = new_name
+        else:
+            pasted.pop("name", None)
         buttons.append(pasted)
         page_data["buttons"] = buttons
         dumped = yaml.safe_dump(page_data, sort_keys=False, allow_unicode=False)
@@ -2378,6 +2395,7 @@ class EditorTab(QWidget):
             part_sizes: dict[str, int] = {}
             part_colors: dict[str, str] = {}
             part_formulas: dict[str, str] = {}
+            part_leds: dict[str, str] = {}
             if isinstance(ann, dict):
                 ann_model = str(ann.get("model") or "B")
                 ann_style = str(ann.get("annunciator-style") or "")
@@ -2389,6 +2407,7 @@ class EditorTab(QWidget):
                         part_sizes[part_id] = int(part_cfg.get("text-size") or 0)
                         part_colors[part_id] = str(part_cfg.get("color") or "")
                         part_formulas[part_id] = str(part_cfg.get("formula") or "")
+                        part_leds[part_id] = str(part_cfg.get("led") or "")
             else:
                 ann_style = ""
             self._set_visual_combo_value(self.visual_ann_model, ann_model)
@@ -2401,6 +2420,7 @@ class EditorTab(QWidget):
                 row["text_size"].setValue(part_sizes.get(part_id, 0))
                 row["color_edit"].setText(part_colors.get(part_id, ""))
                 row["formula_edit"].setText(part_formulas.get(part_id, ""))
+                self._set_visual_combo_value(row["led_combo"], part_leds.get(part_id, ""))
         finally:
             self._button_visual_syncing = False
         self._update_visual_field_visibility()
@@ -2501,6 +2521,7 @@ class EditorTab(QWidget):
                 text_size = row["text_size"].value()
                 color = row["color_edit"].text().strip()
                 formula = row["formula_edit"].text().strip()
+                led = str(row["led_combo"].currentData() or "").strip()
                 part_cfg = dict(parts.get(part_id) or {})
                 if text:
                     part_cfg["text"] = text
@@ -2520,6 +2541,10 @@ class EditorTab(QWidget):
                     part_cfg["formula"] = formula
                 else:
                     part_cfg.pop("formula", None)
+                if led:
+                    part_cfg["led"] = led
+                else:
+                    part_cfg.pop("led", None)
                 if part_cfg:
                     parts[part_id] = part_cfg
                 elif part_id in parts:
@@ -2540,6 +2565,7 @@ class EditorTab(QWidget):
             self._loading_file = False
         self._schedule_button_edit_preview()
         self._update_advanced_preview()
+        self._button_autosave_timer.start(600)
         self._update_action_state()
 
     def _on_button_yaml_text_changed(self) -> None:
@@ -2607,7 +2633,11 @@ class EditorTab(QWidget):
         if not preset:
             return
         current = dict(self._visual_buttons[self._selected_button_id])
-        merged = {"index": current.get("index"), "name": current.get("name", "BUTTON")} | dict(preset["config"])
+        current_name = str(current.get("name") or "").strip()
+        base = {"index": current.get("index")}
+        if current_name:
+            base["name"] = current_name
+        merged = base | dict(preset["config"])
         if "label" not in merged and current.get("label"):
             merged["label"] = current.get("label")
         ok = self._apply_button_yaml(self._selected_button_id, yaml.safe_dump(merged, sort_keys=False, allow_unicode=False))
@@ -3063,7 +3093,11 @@ class EditorTab(QWidget):
             while f"btn-{next_seq}" in self._visual_buttons:
                 next_seq += 1
             bid = f"btn-{next_seq}"
-            pasted["name"] = self._unique_button_name(self._button_name(pasted), list(self._visual_buttons.values()))
+            new_name = self._unique_button_name(self._button_name(pasted), list(self._visual_buttons.values()))
+            if new_name:
+                pasted["name"] = new_name
+            else:
+                pasted.pop("name", None)
             self._visual_buttons[bid] = pasted
             self._drop_preview_cache(bid)
             new_ids.append(bid)
@@ -3082,11 +3116,15 @@ class EditorTab(QWidget):
             return
         pasted = dict(data)
         pasted["index"] = target_index
-        pasted["name"] = self._unique_button_name(
+        new_name = self._unique_button_name(
             self._button_name(pasted),
             list(self._visual_buttons.values()),
             exclude_index=target_index,
         )
+        if new_name:
+            pasted["name"] = new_name
+        else:
+            pasted.pop("name", None)
         existing_id = self._button_id_at_index(target_index)
         if existing_id is not None:
             self._visual_buttons[existing_id] = pasted
@@ -3322,7 +3360,11 @@ class EditorTab(QWidget):
             self.editor.document().setModified(mark_modified)
         finally:
             self._loading_file = False
-        self.modified_label.setText("Unsaved changes" if mark_modified else "")
+        if mark_modified:
+            self.modified_label.setText("Unsaved changes")
+            self._page_autosave_timer.start(1000)
+        else:
+            self.modified_label.setText("")
         self._effective_page_attrs_cache = {}
 
     def _update_action_state(self) -> None:
