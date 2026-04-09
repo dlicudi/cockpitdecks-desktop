@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -300,6 +301,49 @@ def reload_deck(deck_name: str, *, base_url: str = "http://127.0.0.1:7777", time
         return False, "Cockpitdecks not running"
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         return False, str(exc)
+
+
+def render_button_preview(
+    deck_name: str,
+    button_yaml: str,
+    *,
+    base_url: str = "http://127.0.0.1:7777",
+    timeout: float = 5.0,
+) -> tuple[bytes | None, dict[str, Any] | None, str | None]:
+    """POST /preview and return decoded PNG bytes plus render metadata."""
+    url = f"{base_url.rstrip('/')}/preview"
+    body = json.dumps({"deck": deck_name, "code": button_yaml}).encode("utf-8")
+    try:
+        req = Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None, None, "preview: not a JSON object"
+        image_data = data.get("image")
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        if not isinstance(image_data, str) or not image_data.strip():
+            if isinstance(meta, dict) and meta.get("error"):
+                return None, meta, str(meta.get("error"))
+            return None, meta, "preview: no image returned"
+        try:
+            decoded = base64.b64decode(image_data.encode("ascii"), validate=False)
+        except (ValueError, UnicodeEncodeError) as exc:
+            return None, meta, f"preview decode failed: {exc}"
+        return decoded, meta, None
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None, None, "Cockpitdecks preview API missing"
+        return None, None, f"HTTP {exc.code}"
+    except URLError:
+        return None, None, "Cockpitdecks not running"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return None, None, str(exc)
 
 
 def cockpitdecks_web_status_line(*, url: str = DEFAULT_COCKPIT_WEB, timeout: float = 1.5) -> tuple[str, str | None]:

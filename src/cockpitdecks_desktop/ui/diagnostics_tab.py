@@ -58,7 +58,7 @@ _QUEUE_WARN = 30
 _QUEUE_CRIT = 100
 _QUEUE_MAX = 150
 
-_MONO = "'Menlo', 'SF Mono', monospace"
+_MONO = "'Menlo', 'SF Mono', Monaco, Consolas, 'Courier New'"
 
 
 def _parse_rate(text: str) -> float | None:

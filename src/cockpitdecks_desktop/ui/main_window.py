@@ -69,6 +69,7 @@ from cockpitdecks_desktop.ui.deck_packs_tab import DeckPacksTab
 from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
 from cockpitdecks_desktop.ui.topology_tab import TopologyTab
 from cockpitdecks_desktop.ui.devices_tab import DevicesTab
+from cockpitdecks_desktop.ui.editor_tab import EditorTab
 from cockpitdecks_desktop.ui.releases_tab import ReleasesTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 from cockpitdecks_desktop.ui.sparkline import SparklineWidget
@@ -883,7 +884,7 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setPlaceholderText("Preflight, launch, and Cockpitdecks output will appear here...")
         self.log.setStyleSheet(
-            "QPlainTextEdit { font-family: Menlo, Monaco, monospace; font-size: 12px;"
+            "QPlainTextEdit { font-family: Menlo, 'SF Mono', Monaco, Consolas, 'Courier New'; font-size: 12px;"
             " background-color: #1e1e1e; color: #d4d4d4; border: 1px solid #333; border-radius: 4px; padding: 4px; }"
             " QPlainTextEdit::selection { background-color: #264f78; color: #ffffff; }"
         )
@@ -923,7 +924,7 @@ class MainWindow(QMainWindow):
         self._log_search_input.setPlaceholderText("Search logs...")
         self._log_search_input.setStyleSheet(
             "QLineEdit { background: #1e1e1e; color: #d4d4d4; border: 1px solid #555;"
-            " border-radius: 3px; padding: 3px 6px; font-family: Menlo, Monaco, monospace; font-size: 12px; }"
+            " border-radius: 3px; padding: 3px 6px; font-family: Menlo, 'SF Mono', Monaco, Consolas, 'Courier New'; font-size: 12px; }"
         )
         self._log_search_count = QLabel("")
         self._log_search_count.setStyleSheet("color: #888; font-size: 11px; min-width: 70px;")
@@ -974,11 +975,15 @@ class MainWindow(QMainWindow):
         self.topology_tab = TopologyTab()
         self.devices_tab = DevicesTab()
         self.devices_tab.log_line.connect(self._append)
+        self.editor_tab = EditorTab()
+        self.editor_tab.log_line.connect(self._append)
+        self.editor_tab.reload_requested.connect(self.reload_decks)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
         self.tabs.addTab(self.topology_tab, "Topology")
         self.tabs.addTab(self.devices_tab, "Devices")
+        self.tabs.addTab(self.editor_tab, "Editor")
         self.tabs.addTab(tab_decks, "Decks")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(self.releases_tab, "Releases")
@@ -1027,6 +1032,40 @@ class MainWindow(QMainWindow):
         self._desktop_update_timer.timeout.connect(self._schedule_desktop_update_poll)
         self._desktop_update_timer.start(30 * 60 * 1000)
         QTimer.singleShot(1500, self._schedule_desktop_update_poll)
+        QTimer.singleShot(0, self._restore_window_geometry)
+
+    def _restore_window_geometry(self) -> None:
+        settings = load_desktop_settings()
+        try:
+            width = int((settings.get("WINDOW_WIDTH") or "").strip() or "0")
+            height = int((settings.get("WINDOW_HEIGHT") or "").strip() or "0")
+            x = int((settings.get("WINDOW_X") or "").strip() or "0")
+            y = int((settings.get("WINDOW_Y") or "").strip() or "0")
+        except (TypeError, ValueError):
+            width = height = x = y = 0
+        maximized = str(settings.get("WINDOW_MAXIMIZED") or "0").strip() == "1"
+        if width > 200 and height > 200:
+            self.resize(width, height)
+        if x or y:
+            self.move(x, y)
+        if maximized:
+            self.showMaximized()
+
+    def _save_window_geometry(self) -> None:
+        updates = {
+            "WINDOW_MAXIMIZED": "1" if self.isMaximized() else "0",
+        }
+        if not self.isMaximized():
+            g = self.geometry()
+            updates.update(
+                {
+                    "WINDOW_X": str(g.x()),
+                    "WINDOW_Y": str(g.y()),
+                    "WINDOW_WIDTH": str(g.width()),
+                    "WINDOW_HEIGHT": str(g.height()),
+                }
+            )
+        save_desktop_settings(self._settings_with_updates(**updates))
 
     # Color mapping for desktop [tag] prefixes and Python logging levels.
     _LOG_COLORS: dict[str, str] = {
@@ -1676,6 +1715,7 @@ class MainWindow(QMainWindow):
     def _refresh_launch_targets(self) -> None:
         selected = self._configured_launch_target()
         self._launch_targets = self._discover_launch_targets()
+        self._sync_editor_targets(selected)
         self._populate_decks_list()
 
     def _selected_launch_target(self) -> Path | None:
@@ -1814,12 +1854,16 @@ class MainWindow(QMainWindow):
         return card
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if (
-            hasattr(self, "_deck_grid_area")
-            and watched is self._deck_grid_area.viewport()
-            and event.type() == QEvent.Type.Resize
-        ):
-            QTimer.singleShot(0, self._populate_decks_list)
+        try:
+            if (
+                hasattr(self, "_deck_grid_area")
+                and self._deck_grid_area is not None
+                and watched is self._deck_grid_area.viewport()
+                and event.type() == QEvent.Type.Resize
+            ):
+                QTimer.singleShot(0, self._populate_decks_list)
+        except RuntimeError:
+            return super().eventFilter(watched, event)
         return super().eventFilter(watched, event)
 
     def _deck_grid_metrics(self) -> tuple[int, int]:
@@ -1893,10 +1937,12 @@ class MainWindow(QMainWindow):
 
     def _on_deck_card_clicked(self, path: str) -> None:
         self._selected_deck_path = path
+        self.editor_tab.set_selected_target(path)
         self._populate_decks_list()
 
     def _select_decks_item_by_path(self, path: str) -> None:
         self._selected_deck_path = path
+        self.editor_tab.set_selected_target(path)
         self._populate_decks_list()
 
     def _selected_decks_target_path(self) -> str:
@@ -1913,6 +1959,7 @@ class MainWindow(QMainWindow):
         save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=path))
         self.settings_form.reload_from_disk()
         self._select_decks_item_by_path(path)
+        self._sync_editor_targets(path)
         self.refresh_info_panel()
 
     def _use_selected_decks_target(self) -> None:
@@ -2814,6 +2861,8 @@ class MainWindow(QMainWindow):
             self._refresh_devices_panel()
         elif current_tab is self.topology_tab:
             self._refresh_topology_panel()
+        elif current_tab is self.editor_tab:
+            self._sync_editor_targets(self._selected_deck_path or self._configured_launch_target())
 
     def _update_preflight_checks(self, xplane_line: str, cockpit_web_line: str, session_info: "SessionInfo") -> None:
         def _set(icon: QLabel, lbl: QLabel, ok: bool | None, text: str) -> None:
@@ -2894,6 +2943,12 @@ class MainWindow(QMainWindow):
             self.log_line.emit(f"[{tag}] {msg}")
 
         threading.Thread(target=work, name="ReloadDecks", daemon=True).start()
+
+    def _sync_editor_targets(self, selected: str = "") -> None:
+        if not hasattr(self, "editor_tab"):
+            return
+        items = [(self._launch_target_label(info), info.path) for info in self._launch_targets]
+        self.editor_tab.set_targets(items, selected or self._configured_launch_target())
 
     def start_cockpitdecks(self) -> None:
         # Reset log-analysis state for the new launch
@@ -3072,4 +3127,5 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._launcher_is_running():
             self._terminate_launcher_process("stopping")
+        self._save_window_geometry()
         super().closeEvent(event)
