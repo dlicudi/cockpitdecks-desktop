@@ -8,6 +8,7 @@ from typing import Any
 import importlib
 
 import yaml
+from PIL import Image
 
 from cockpitdecks import Config
 from cockpitdecks.cockpit import Cockpit
@@ -212,6 +213,9 @@ def render_button_preview_native(
             image = button.get_representation()
             if image is None:
                 return None, None, "button representation not created"
+            target_size = deck.get_spanned_image_size(button) or deck.get_image_size(button.index)
+            if target_size and getattr(image, "size", None) != target_size:
+                image = image.resize(target_size, resample=Image.Resampling.LANCZOS)
             buf = io.BytesIO()
             image.save(buf, format="PNG")
             meta = {

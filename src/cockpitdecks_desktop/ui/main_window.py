@@ -2947,8 +2947,11 @@ class MainWindow(QMainWindow):
     def _sync_editor_targets(self, selected: str = "") -> None:
         if not hasattr(self, "editor_tab"):
             return
-        items = [(self._launch_target_label(info), info.path) for info in self._launch_targets]
-        self.editor_tab.set_targets(items, selected or self._configured_launch_target())
+        path = selected or self._configured_launch_target()
+        if not path and self._launch_targets:
+            path = self._launch_targets[0].path
+        if path:
+            self.editor_tab.set_selected_target(path)
 
     def start_cockpitdecks(self) -> None:
         # Reset log-analysis state for the new launch

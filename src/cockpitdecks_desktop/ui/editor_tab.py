@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QPoint, QMimeData, QSignalBlocker, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPoint, QMimeData, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QDrag, QFont, QKeySequence, QMouseEvent, QPixmap, QTextOption, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,8 +14,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -36,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cockpitdecks_desktop.services.live_apis import render_button_preview
 from cockpitdecks_desktop.services.native_preview import describe_slot_native, list_preview_fonts, render_button_preview_native, warm_preview_pool
 
 
@@ -53,6 +56,19 @@ def _short_path(path: Path | str, *, max_len: int = 96) -> str:
     head = max_len // 2 - 2
     tail = max_len - head - 3
     return text[:head] + "…" + text[-tail:]
+
+
+def _render_preview_with_fallback(
+    target_root: Path | None,
+    deck_name: str,
+    button_yaml: str,
+) -> tuple[bytes | None, dict | None, str | None]:
+    if target_root is None:
+        return None, None, "no preview target"
+    image_bytes, meta, error = render_button_preview(deck_name, button_yaml)
+    if image_bytes:
+        return image_bytes, meta, error
+    return render_button_preview_native(target_root, deck_name, button_yaml)
 
 
 class _ButtonEditDocument:
@@ -107,9 +123,8 @@ _ACTIVATION_SCHEMA: dict[str, list[tuple[str, str]]] = {
     "Push Button": [
         ("push", "Momentary Command"),
         ("begin-end-command", "Begin / End Command"),
-        ("onoff", "Toggle"),
+        ("encoder-toggle", "Toggle On/Off"),
         ("short-or-long-press", "Short / Long Press"),
-        ("updown", "Up / Down"),
     ],
     "Page": [
         ("page", "Load Page"),
@@ -140,6 +155,9 @@ _REPRESENTATION_SCHEMA: dict[str, list[tuple[str, str]]] = {
     "Switch": [
         ("switch", "Switch"),
         ("push-switch", "Push Switch"),
+    ],
+    "Gauge": [
+        ("gauge", "Gauge"),
     ],
 }
 
@@ -191,28 +209,28 @@ def _set_form_row_visible(layout: QFormLayout, field: QWidget, visible: bool) ->
 
 
 def _two_command_fields(action_type: str) -> tuple[str, str] | None:
-    if action_type == "onoff":
-        return ("command-on", "command-off")
-    if action_type == "updown":
-        return ("command-up", "command-down")
+    """Return the two sub-keys under 'commands' dict for dual-command activations."""
+    if action_type == "encoder-toggle":
+        return ("toggle-on", "toggle-off")
     if action_type == "short-or-long-press":
-        return ("command-short", "command-long")
+        return ("press", "long-press")
     return None
 
 
 def _button_preview_validation_error(data: dict) -> str | None:
-    action_type = str(data.get("type") or "push").strip()
-    if action_type == "begin-end-command" and not str(data.get("command") or "").strip():
+    action_type = str(data.get("activation") or "push").strip()
+    commands = data.get("commands") or {}
+    if action_type == "begin-end-command" and not str(commands.get("press") or "").strip():
         return "Begin / End Command needs a command."
-    if action_type in {"onoff", "updown"}:
+    if action_type == "encoder-toggle":
         fields = _two_command_fields(action_type)
         has_dataref = bool(str(data.get("set-dataref") or "").strip() or str(data.get("dataref") or "").strip())
-        has_pair = fields is not None and all(str(data.get(field) or "").strip() for field in fields)
+        has_pair = fields is not None and all(str(commands.get(field) or "").strip() for field in fields)
         if not has_pair and not has_dataref:
             return f"{action_type} needs two named commands or a dataref."
     if action_type == "short-or-long-press":
         fields = _two_command_fields(action_type)
-        if fields is None or not all(str(data.get(field) or "").strip() for field in fields):
+        if fields is None or not all(str(commands.get(field) or "").strip() for field in fields):
             return "Short / Long Press needs short and long commands."
     if action_type == "page" and not str(data.get("page") or "").strip():
         return "Load Page needs a page name."
@@ -247,6 +265,8 @@ class _VisualButtonCard(QFrame):
         self._dark = dark
         self._scale = max(0.6, min(2.0, scale))
         self._size = int(118 * self._scale)
+        self._render_width = self._size
+        self._render_height = self._size
 
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFixedSize(self._size, self._size)
@@ -269,20 +289,41 @@ class _VisualButtonCard(QFrame):
             preview_label = QLabel()
             preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             preview_label.setStyleSheet("border: none;")
-            target = self._size
-            preview_label.setFixedSize(target, target)
+            margin_w = self._layout.contentsMargins().left() + self._layout.contentsMargins().right()
+            margin_h = self._layout.contentsMargins().top() + self._layout.contentsMargins().bottom()
+            target_w = max(1, self._render_width - margin_w)
+            target_h = max(1, self._render_height - margin_h)
+            preview_label.setFixedSize(target_w, target_h)
             pixmap = QPixmap(preview)
             src_w = max(1, pixmap.width())
             src_h = max(1, pixmap.height())
-            dpr = max(1.0, min(src_w / target, src_h / target))
-            
+
+            # Scale up if the rendered preview is smaller than the card's logical size.
+            if src_w < target_w or src_h < target_h:
+                scale = max(target_w / src_w, target_h / src_h)
+                pixmap = pixmap.scaled(
+                    int(src_w * scale), int(src_h * scale),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                src_w = max(1, pixmap.width())
+                src_h = max(1, pixmap.height())
+
+            # DPR trick for downscaling on HiDPI: keep hi-res pixels, tell Qt to
+            # render them at the logical target size.
+            dpr = max(1.0, min(src_w / target_w, src_h / target_h))
+
             rounded = QPixmap(pixmap.size())
             rounded.fill(Qt.GlobalColor.transparent)
             painter = QPainter(rounded)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             path = QPainterPath()
-            radius = min(src_w, src_h) * 0.15
+            # Match the grid slot corner treatment with a small logical radius,
+            # instead of scaling corner roundness with the full spanned image size.
+            logical_radius = 8.0
+            radius_scale = min(src_w / max(1, target_w), src_h / max(1, target_h))
+            radius = max(1.0, logical_radius * radius_scale)
             path.addRoundedRect(0, 0, src_w, src_h, radius, radius)
             painter.setClipPath(path)
             painter.drawPixmap(0, 0, pixmap)
@@ -294,8 +335,9 @@ class _VisualButtonCard(QFrame):
             self._layout.addWidget(preview_label, 1)
             return
 
-        title = str(self.button_data.get("label") or self.button_data.get("text") or self.button_data.get("name") or self.button_data.get("type") or "Button")
-        subtitle = str(self.button_data.get("text") or self.button_data.get("command") or self.button_data.get("page") or self.button_data.get("type") or "").strip()
+        title = str(self.button_data.get("label") or self.button_data.get("text") or self.button_data.get("name") or self.button_data.get("activation") or "Button")
+        _cmds = self.button_data.get("commands") or {}
+        subtitle = str(self.button_data.get("text") or _cmds.get("press") or self.button_data.get("page") or self.button_data.get("activation") or "").strip()
         if len(subtitle) > 26:
             subtitle = subtitle[:23] + "…"
 
@@ -322,14 +364,37 @@ class _VisualButtonCard(QFrame):
     def update_preview(self, preview: QPixmap | None, preview_status: str | None = None) -> None:
         self._render_content(preview=preview, preview_status=preview_status)
 
+    def resize_to_span(self, w: int, h: int, preview: QPixmap | None = None, preview_status: str | None = None) -> None:
+        """Resize card to span multiple grid cells and re-render content at the new size."""
+        self._size = min(w, h)
+        self._render_width = max(1, w)
+        self._render_height = max(1, h)
+        self.setFixedSize(w, h)
+        self._render_content(preview=preview, preview_status=preview_status)
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self._apply_theme()
+
     def _apply_theme(self) -> None:
+        selected = getattr(self, "_selected", False)
+        pad = 2 if selected else 0
+        if hasattr(self, "_layout"):
+            self._layout.setContentsMargins(pad, pad, pad, pad)
         if self._dark:
             self._fg_primary = "#e2e8f0"
             self._fg_secondary = "#94a3b8"
+            sel_border = "#60a5fa"
+            sel_bg = "rgba(96, 165, 250, 0.18)"
         else:
             self._fg_primary = "#0f172a"
             self._fg_secondary = "#64748b"
-        self.setStyleSheet("QFrame { background: transparent; border: none; }")
+            sel_border = "#2563eb"
+            sel_bg = "rgba(37, 99, 235, 0.10)"
+        if selected:
+            self.setStyleSheet(f"QFrame {{ background: {sel_bg}; border: 2px solid {sel_border}; border-radius: 8px; }}")
+        else:
+            self.setStyleSheet("QFrame { background: transparent; border: none; }")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -353,6 +418,9 @@ class _VisualButtonCard(QFrame):
         except Exception:
             pass
         drag.setMimeData(mime)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(event.pos())
         drag.exec(Qt.DropAction.MoveAction)
         self._drag_start = None
         return
@@ -689,7 +757,6 @@ class EditorTab(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._targets: list[tuple[str, str]] = []
         self._current_target_path: Path | None = None
         self._current_file_path: Path | None = None
         self._loading_file = False
@@ -721,6 +788,9 @@ class EditorTab(QWidget):
         self._preview_ready_targets: set[str] = set()
         self._visible_cards: dict[str, _VisualButtonCard] = {}
         self._visible_slots: dict[str, _GridSlot] = {}
+        self._visible_cell_slots: dict[tuple[int, int], _GridSlot] = {}
+        self._visible_named_cards: dict[str, _VisualButtonCard] = {}
+        self._span_card_specs: dict[str, tuple[int, int, int, int]] = {}
         self._effective_page_attrs_cache: dict = {}
         self._selected_slot_info: dict = {}
         self._button_edit_id: str | None = None
@@ -761,24 +831,19 @@ class EditorTab(QWidget):
         toolbar_layout.setContentsMargins(12, 10, 12, 10)
         toolbar_layout.setSpacing(8)
 
-        label = QLabel("Target")
-        label.setStyleSheet("font-size: 11px; font-weight: 700; color: #334155;")
-        toolbar_layout.addWidget(label)
+        self.btn_open_folder = QPushButton("Open Folder…")
+        self.btn_open_folder.clicked.connect(self._open_folder)
+        toolbar_layout.addWidget(self.btn_open_folder)
 
-        self.target_combo = _NoWheelComboBox()
-        self.target_combo.setMinimumWidth(360)
-        self.target_combo.currentIndexChanged.connect(self._on_target_changed)
-        toolbar_layout.addWidget(self.target_combo, 1)
-
-        self.path_label = QLabel("No launch target selected")
+        self.path_label = QLabel("No folder open")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        toolbar_layout.addWidget(self.path_label, 2)
+        toolbar_layout.addWidget(self.path_label, 1)
 
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.clicked.connect(self.refresh_tree)
         toolbar_layout.addWidget(self.btn_refresh)
 
-        self.btn_reveal_target = QPushButton("Reveal Target")
+        self.btn_reveal_target = QPushButton("Reveal")
         self.btn_reveal_target.clicked.connect(self._reveal_target)
         toolbar_layout.addWidget(self.btn_reveal_target)
 
@@ -891,9 +956,10 @@ class EditorTab(QWidget):
         self.visual_layout.addWidget(self.visual_hint)
 
         self.grid_host = QWidget()
-        self.grid_layout = QVBoxLayout(self.grid_host)
+        self.grid_layout = QGridLayout(self.grid_host)
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         self.grid_layout.setSpacing(8)
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.visual_layout.addWidget(self.grid_host)
         self.visual_layout.addStretch(1)
 
@@ -1099,6 +1165,26 @@ class EditorTab(QWidget):
         self.visual_style_combo = _NoWheelComboBox()
         representation_form.addRow("Subtype", self.visual_style_combo)
 
+        span_row_widget = QWidget()
+        span_row_layout = QHBoxLayout(span_row_widget)
+        span_row_layout.setContentsMargins(0, 0, 0, 0)
+        span_row_layout.setSpacing(6)
+        self.visual_span_cols = _NoWheelSpinBox()
+        self.visual_span_cols.setRange(1, 12)
+        self.visual_span_cols.setSpecialValueText("1")
+        self.visual_span_cols.setToolTip("Columns this button spans")
+        self.visual_span_rows = _NoWheelSpinBox()
+        self.visual_span_rows.setRange(1, 9)
+        self.visual_span_rows.setSpecialValueText("1")
+        self.visual_span_rows.setToolTip("Rows this button spans")
+        span_row_layout.addWidget(QLabel("Cols"))
+        span_row_layout.addWidget(self.visual_span_cols)
+        span_row_layout.addWidget(QLabel("×  Rows"))
+        span_row_layout.addWidget(self.visual_span_rows)
+        span_row_layout.addStretch(1)
+        self.visual_span_row = span_row_widget
+        representation_form.addRow("Span", self.visual_span_row)
+
         self.visual_label_edit = QLineEdit()
         self.visual_label_row = self.visual_label_edit
         representation_form.addRow("Label", self.visual_label_row)
@@ -1108,6 +1194,11 @@ class EditorTab(QWidget):
         self.visual_label_size.setSpecialValueText("Default")
         self.visual_label_size_row = self.visual_label_size
         representation_form.addRow("Label Size", self.visual_label_size_row)
+
+        self.visual_label_color_edit = QLineEdit()
+        self.visual_label_color_edit.setPlaceholderText("white")
+        self.visual_label_color_row = self.visual_label_color_edit
+        representation_form.addRow("Label Color", self.visual_label_color_row)
 
         self.visual_text_edit = QLineEdit()
         self.visual_text_row = self.visual_text_edit
@@ -1135,6 +1226,12 @@ class EditorTab(QWidget):
         self.visual_ann_style.addItem("Vivisun", "v")
         self.visual_ann_style_row = self.visual_ann_style
         representation_form.addRow("Annun Style", self.visual_ann_style_row)
+
+        self.visual_ann_size = _NoWheelComboBox()
+        for value, label in [("full", "Full"), ("large", "Large"), ("medium", "Medium"), ("small", "Small")]:
+            self.visual_ann_size.addItem(label, value)
+        self.visual_ann_size_row = self.visual_ann_size
+        representation_form.addRow("Annun Size", self.visual_ann_size_row)
 
         self.visual_ann_parts_host = QWidget()
         self.visual_ann_parts_layout = QFormLayout(self.visual_ann_parts_host)
@@ -1214,6 +1311,95 @@ class EditorTab(QWidget):
             )
         self.visual_ann_parts_row = self.visual_ann_parts_host
         representation_form.addRow("Parts", self.visual_ann_parts_row)
+
+        # ── Gauge fields ────────────────────────────────────────────────────────
+        gauge_tick_range_row = QWidget()
+        gauge_tick_range_layout = QHBoxLayout(gauge_tick_range_row)
+        gauge_tick_range_layout.setContentsMargins(0, 0, 0, 0)
+        gauge_tick_range_layout.setSpacing(6)
+        self.visual_gauge_tick_from = _NoWheelSpinBox()
+        self.visual_gauge_tick_from.setRange(-360, 360)
+        self.visual_gauge_tick_from.setValue(-120)
+        self.visual_gauge_tick_to = _NoWheelSpinBox()
+        self.visual_gauge_tick_to.setRange(-360, 360)
+        self.visual_gauge_tick_to.setValue(120)
+        self.visual_gauge_ticks = _NoWheelSpinBox()
+        self.visual_gauge_ticks.setRange(1, 24)
+        self.visual_gauge_ticks.setValue(9)
+        self.visual_gauge_offset = _NoWheelSpinBox()
+        self.visual_gauge_offset.setRange(-200, 200)
+        self.visual_gauge_offset.setValue(20)
+        gauge_tick_range_layout.addWidget(QLabel("From"))
+        gauge_tick_range_layout.addWidget(self.visual_gauge_tick_from)
+        gauge_tick_range_layout.addWidget(QLabel("To"))
+        gauge_tick_range_layout.addWidget(self.visual_gauge_tick_to)
+        gauge_tick_range_layout.addWidget(QLabel("Ticks"))
+        gauge_tick_range_layout.addWidget(self.visual_gauge_ticks)
+        gauge_tick_range_layout.addWidget(QLabel("Offset"))
+        gauge_tick_range_layout.addWidget(self.visual_gauge_offset)
+        self.visual_gauge_tick_range_row = gauge_tick_range_row
+        representation_form.addRow("Tick Range", self.visual_gauge_tick_range_row)
+
+        gauge_needle_row = QWidget()
+        gauge_needle_layout = QHBoxLayout(gauge_needle_row)
+        gauge_needle_layout.setContentsMargins(0, 0, 0, 0)
+        gauge_needle_layout.setSpacing(6)
+        self.visual_gauge_needle_color = QLineEdit()
+        self.visual_gauge_needle_color.setPlaceholderText("white")
+        self.visual_gauge_needle_width = _NoWheelSpinBox()
+        self.visual_gauge_needle_width.setRange(0, 32)
+        self.visual_gauge_needle_width.setSpecialValueText("Default")
+        self.visual_gauge_needle_width.setFixedWidth(70)
+        self.visual_gauge_needle_length = _NoWheelSpinBox()
+        self.visual_gauge_needle_length.setRange(0, 200)
+        self.visual_gauge_needle_length.setSpecialValueText("Default")
+        self.visual_gauge_needle_length.setFixedWidth(70)
+        gauge_needle_layout.addWidget(QLabel("Color"))
+        gauge_needle_layout.addWidget(self.visual_gauge_needle_color, 1)
+        gauge_needle_layout.addWidget(QLabel("W"))
+        gauge_needle_layout.addWidget(self.visual_gauge_needle_width)
+        gauge_needle_layout.addWidget(QLabel("Len"))
+        gauge_needle_layout.addWidget(self.visual_gauge_needle_length)
+        self.visual_gauge_needle_row = gauge_needle_row
+        representation_form.addRow("Needle", self.visual_gauge_needle_row)
+
+        gauge_ticks_style_row = QWidget()
+        gauge_ticks_style_layout = QHBoxLayout(gauge_ticks_style_row)
+        gauge_ticks_style_layout.setContentsMargins(0, 0, 0, 0)
+        gauge_ticks_style_layout.setSpacing(6)
+        self.visual_gauge_tick_color = QLineEdit()
+        self.visual_gauge_tick_color.setPlaceholderText("white")
+        self.visual_gauge_tick_width = _NoWheelSpinBox()
+        self.visual_gauge_tick_width.setRange(0, 32)
+        self.visual_gauge_tick_width.setSpecialValueText("Default")
+        self.visual_gauge_tick_width.setFixedWidth(70)
+        self.visual_gauge_tick_label_size = _NoWheelSpinBox()
+        self.visual_gauge_tick_label_size.setRange(0, 64)
+        self.visual_gauge_tick_label_size.setSpecialValueText("Default")
+        self.visual_gauge_tick_label_size.setFixedWidth(70)
+        gauge_ticks_style_layout.addWidget(QLabel("Color"))
+        gauge_ticks_style_layout.addWidget(self.visual_gauge_tick_color, 1)
+        gauge_ticks_style_layout.addWidget(QLabel("W"))
+        gauge_ticks_style_layout.addWidget(self.visual_gauge_tick_width)
+        gauge_ticks_style_layout.addWidget(QLabel("Label Sz"))
+        gauge_ticks_style_layout.addWidget(self.visual_gauge_tick_label_size)
+        self.visual_gauge_ticks_style_row = gauge_ticks_style_row
+        representation_form.addRow("Tick Style", self.visual_gauge_ticks_style_row)
+
+        self.visual_gauge_formula_edit = QLineEdit()
+        self.visual_gauge_formula_edit.setPlaceholderText("${sim/dataref} ticks * max_val /")
+        btn_pick_gauge_formula = QPushButton("Find…")
+        btn_pick_gauge_formula.clicked.connect(lambda: self._open_suggestion_picker_for_formula_edit(self.visual_gauge_formula_edit))
+        self.visual_gauge_formula_row = _field_with_button(self.visual_gauge_formula_edit, btn_pick_gauge_formula)
+        representation_form.addRow("Formula", self.visual_gauge_formula_row)
+
+        self.visual_gauge_tick_labels = QPlainTextEdit()
+        self.visual_gauge_tick_labels.setPlaceholderText("One label per line\n(e.g. 0\n5\n10\n...)")
+        self.visual_gauge_tick_labels.setFixedHeight(80)
+        self.visual_gauge_tick_labels_row = self.visual_gauge_tick_labels
+        representation_form.addRow("Tick Labels", self.visual_gauge_tick_labels_row)
+        # ── end gauge fields ─────────────────────────────────────────────────────
+
         representation_layout.addLayout(representation_form)
         _visual_columns_layout.addWidget(self.visual_representation_section, 1, Qt.AlignmentFlag.AlignTop)
         visual_form_wrap.addWidget(_visual_columns, 1)
@@ -1269,15 +1455,31 @@ class EditorTab(QWidget):
             (self.visual_page_edit, "textChanged"),
             (self.visual_pages_edit, "textChanged"),
             (self.visual_deck_edit, "textChanged"),
+            (self.visual_span_cols, "valueChanged"),
+            (self.visual_span_rows, "valueChanged"),
             (self.visual_label_edit, "textChanged"),
             (self.visual_label_size, "valueChanged"),
+            (self.visual_label_color_edit, "textChanged"),
             (self.visual_text_edit, "textChanged"),
             (self.visual_text_size, "valueChanged"),
             (self.visual_text_color_edit, "textChanged"),
             (self.visual_ann_model, "currentIndexChanged"),
             (self.visual_ann_style, "currentIndexChanged"),
+            (self.visual_ann_size, "currentIndexChanged"),
+            (self.visual_gauge_tick_from, "valueChanged"),
+            (self.visual_gauge_tick_to, "valueChanged"),
+            (self.visual_gauge_ticks, "valueChanged"),
+            (self.visual_gauge_offset, "valueChanged"),
+            (self.visual_gauge_needle_color, "textChanged"),
+            (self.visual_gauge_needle_width, "valueChanged"),
+            (self.visual_gauge_needle_length, "valueChanged"),
+            (self.visual_gauge_tick_color, "textChanged"),
+            (self.visual_gauge_tick_width, "valueChanged"),
+            (self.visual_gauge_tick_label_size, "valueChanged"),
+            (self.visual_gauge_formula_edit, "textChanged"),
         ):
             getattr(widget, signal_name).connect(self._apply_visual_fields_to_yaml)
+        self.visual_gauge_tick_labels.textChanged.connect(self._apply_visual_fields_to_yaml)
         for row in self.visual_ann_part_rows:
             row["text_edit"].textChanged.connect(self._apply_visual_fields_to_yaml)
             row["font_combo"].currentTextChanged.connect(self._apply_visual_fields_to_yaml)
@@ -1372,41 +1574,25 @@ class EditorTab(QWidget):
         self._populate_presets()
         self._update_action_state()
 
-    def set_targets(self, targets: list[tuple[str, str]], selected_path: str = "") -> None:
-        self._targets = list(targets)
-        blocker = QSignalBlocker(self.target_combo)
-        self.target_combo.clear()
-        selected_idx = -1
-        for idx, (label, path) in enumerate(self._targets):
-            self.target_combo.addItem(label, path)
-            if selected_path and path == selected_path:
-                selected_idx = idx
-        del blocker
-        if selected_idx >= 0:
-            self.target_combo.setCurrentIndex(selected_idx)
-        elif self.target_combo.count() > 0 and self.target_combo.currentIndex() < 0:
-            self.target_combo.setCurrentIndex(0)
-        elif self.target_combo.count() == 0:
-            self._set_target_path(None)
-
     def set_selected_target(self, selected_path: str) -> None:
+        """Open a specific folder in the editor (e.g. when a deck card is clicked)."""
         if not selected_path:
             return
-        idx = self.target_combo.findData(selected_path)
-        if idx >= 0 and idx != self.target_combo.currentIndex():
-            self.target_combo.setCurrentIndex(idx)
+        path = Path(selected_path)
+        if path != self._current_target_path:
+            self._set_target_path(path)
 
     def refresh_tree(self) -> None:
         current = self._current_target_path
         self.file_tree.clear()
         if current is None or not current.exists():
-            self.status_label.setText("Select a valid target to edit.")
+            self.status_label.setText("Open a folder to browse config files.")
             self._update_action_state()
             return
 
         files = self._collect_target_files(current)
         if not files:
-            self.status_label.setText("No editable config files found under this target.")
+            self.status_label.setText("No editable config files found in this folder.")
             self._update_action_state()
             return
 
@@ -1430,7 +1616,7 @@ class EditorTab(QWidget):
                         item.setData(0, Qt.ItemDataRole.UserRole, str(config_path))
                 parent = item
 
-        self.file_tree.expandToDepth(1)
+        self.file_tree.expandAll()
         self._update_tree_dirty_state()
         self.status_label.setText(f"{len(files)} editable files loaded.")
         self._update_action_state()
@@ -1478,22 +1664,22 @@ class EditorTab(QWidget):
     def _collect_target_files(self, target_root: Path) -> list[Path]:
         allowed_suffixes = {".yaml", ".yml", ".json", ".txt", ".j2", ".css", ".js"}
         results: list[Path] = []
-        manifest = target_root / "manifest.yaml"
-        if manifest.is_file():
-            results.append(Path("manifest.yaml"))
-        base = target_root / "deckconfig"
-        if base.is_dir():
-            for path in sorted(base.rglob("*")):
-                if not path.is_file() or path.name.startswith("."):
-                    continue
-                if path.suffix.lower() not in allowed_suffixes:
-                    continue
-                results.append(path.relative_to(target_root))
+        for path in sorted(target_root.rglob("*")):
+            if not path.is_file():
+                continue
+            # skip hidden files and anything inside hidden directories
+            if any(part.startswith(".") for part in path.relative_to(target_root).parts):
+                continue
+            if path.suffix.lower() not in allowed_suffixes:
+                continue
+            results.append(path.relative_to(target_root))
         return results
 
-    def _on_target_changed(self, index: int) -> None:
-        path = self.target_combo.itemData(index) if index >= 0 else None
-        self._set_target_path(Path(path) if path else None)
+    def _open_folder(self) -> None:
+        start = str(self._current_target_path) if self._current_target_path else str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Open Folder", start)
+        if chosen:
+            self._set_target_path(Path(chosen))
 
     def _set_target_path(self, path: Path | None) -> None:
         self._current_target_path = path
@@ -1504,7 +1690,8 @@ class EditorTab(QWidget):
         self.file_label.setText("Select a config file")
         self.modified_label.setText("")
         self._visual_reset()
-        self.path_label.setText("No launch target selected" if path is None else _short_path(path))
+        self.path_label.setText("No folder open" if path is None else _short_path(path))
+        self.btn_reveal_target.setEnabled(path is not None)
         self._warm_preview_pool_async(path)
         self.refresh_tree()
 
@@ -1885,6 +2072,7 @@ class EditorTab(QWidget):
             f"QPushButton:checked {{ background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }}"
         )
         for btn in (
+            self.btn_open_folder,
             self.btn_refresh,
             self.btn_reveal_target,
             self.btn_text_view,
@@ -2201,8 +2389,8 @@ class EditorTab(QWidget):
                 "label": "Push Annunciator",
                 "hint": "Best for toggles, AP modes, lights, pumps, and other stateful controls.",
                 "config": {
-                    "type": "push",
-                    "command": "sim/none/command",
+                    "activation": "push",
+                    "commands": {"press": "sim/none/command"},
                     "annunciator": {
                         "size": "medium",
                         "model": "B",
@@ -2216,12 +2404,12 @@ class EditorTab(QWidget):
             "page_nav": {
                 "label": "Page Navigation",
                 "hint": "Use this for page changes or returning to a home/index page.",
-                "config": {"type": "page", "label": "PAGE", "label-size": 12, "page": "index"},
+                "config": {"activation": "page", "label": "PAGE", "label-size": 12, "page": "index"},
             },
             "status_tile": {
                 "label": "Status Tile",
                 "hint": "Read-only value tile for things like IAS, ALT, BARO, fuel, or temps.",
-                "config": {"type": "none", "label": "STATUS", "label-size": 12, "text": "VALUE", "text-size": 24},
+                "config": {"activation": "none", "label": "STATUS", "label-size": 12, "text": "VALUE", "text-size": 24},
             },
         }
 
@@ -2295,21 +2483,17 @@ class EditorTab(QWidget):
         data = dict(self._button_doc.current_data or {})
         preserved = dict(data)
         for key in [
-            "type",
-            "command",
-            "command-on",
-            "command-off",
-            "command-up",
-            "command-down",
-            "command-short",
-            "command-long",
+            "activation",
+            "commands",
             "page",
             "deck",
             "label",
             "label-size",
+            "label-color",
             "text",
             "text-size",
             "text-color",
+            "formula",
         ]:
             preserved.pop(key, None)
         if preserved.get("annunciator") and str(self.visual_style_combo.currentData() or "") == "annunciator":
@@ -2322,6 +2506,15 @@ class EditorTab(QWidget):
                 preserved["annunciator"] = ann
             else:
                 preserved.pop("annunciator", None)
+        if preserved.get("gauge") and str(self.visual_style_combo.currentData() or "") == "gauge":
+            gauge = dict(preserved.get("gauge") or {})
+            for _k in ("tick-from", "tick-to", "ticks", "gauge-offset", "needle-color", "needle-width",
+                       "needle-length", "tick-color", "tick-width", "tick-label-size", "tick-labels"):
+                gauge.pop(_k, None)
+            if gauge:
+                preserved["gauge"] = gauge
+            else:
+                preserved.pop("gauge", None)
         self.button_advanced_preview.setPlainText(
             yaml.safe_dump(preserved or {"info": "No preserved advanced fields"}, sort_keys=False, allow_unicode=False)
         )
@@ -2333,9 +2526,10 @@ class EditorTab(QWidget):
         is_page = action_type == "page"
         is_page_cycle = action_type == "page-cycle"
         is_command_like = action_type in {"push", "begin-end-command"}
-        is_two_command = action_type in {"onoff", "updown", "short-or-long-press"}
+        is_two_command = action_type in {"encoder-toggle", "short-or-long-press"}
         uses_remote_deck = action_type in {"page", "reload"}
         is_annunciator = style == "annunciator"
+        is_gauge = style == "gauge"
 
         _set_form_row_visible(self.visual_activation_form, self.visual_command_row, is_command_like)
         _set_form_row_visible(self.visual_activation_form, self.visual_command_pair_host, is_two_command)
@@ -2343,16 +2537,11 @@ class EditorTab(QWidget):
         _set_form_row_visible(self.visual_activation_form, self.visual_pages_row, is_page_cycle)
         _set_form_row_visible(self.visual_activation_form, self.visual_deck_row, uses_remote_deck)
 
-        if action_type == "onoff":
+        if action_type == "encoder-toggle":
             self.visual_command1_label.setText("On")
             self.visual_command2_label.setText("Off")
             self.visual_command1_edit.setPlaceholderText("Command when turning on")
             self.visual_command2_edit.setPlaceholderText("Command when turning off")
-        elif action_type == "updown":
-            self.visual_command1_label.setText("Up")
-            self.visual_command2_label.setText("Down")
-            self.visual_command1_edit.setPlaceholderText("Command for up")
-            self.visual_command2_edit.setPlaceholderText("Command for down")
         elif action_type == "short-or-long-press":
             self.visual_command1_label.setText("Short")
             self.visual_command2_label.setText("Long")
@@ -2375,39 +2564,53 @@ class EditorTab(QWidget):
             self.visual_page_edit.setPlaceholderText("")
             self.visual_pages_edit.setPlaceholderText("")
 
-        show_basic_text = not is_annunciator
+        show_basic_text = not is_annunciator and not is_gauge
+        _set_form_row_visible(self.visual_representation_form, self.visual_label_color_row, is_gauge)
         _set_form_row_visible(self.visual_representation_form, self.visual_text_row, show_basic_text)
         _set_form_row_visible(self.visual_representation_form, self.visual_text_size_row, show_basic_text)
         _set_form_row_visible(self.visual_representation_form, self.visual_text_color_row, show_basic_text)
         _set_form_row_visible(self.visual_representation_form, self.visual_ann_model_row, is_annunciator)
         _set_form_row_visible(self.visual_representation_form, self.visual_ann_style_row, is_annunciator)
+        _set_form_row_visible(self.visual_representation_form, self.visual_ann_size_row, is_annunciator)
         _set_form_row_visible(self.visual_representation_form, self.visual_ann_parts_row, is_annunciator)
+        _set_form_row_visible(self.visual_representation_form, self.visual_gauge_tick_range_row, is_gauge)
+        _set_form_row_visible(self.visual_representation_form, self.visual_gauge_needle_row, is_gauge)
+        _set_form_row_visible(self.visual_representation_form, self.visual_gauge_ticks_style_row, is_gauge)
+        _set_form_row_visible(self.visual_representation_form, self.visual_gauge_formula_row, is_gauge)
+        _set_form_row_visible(self.visual_representation_form, self.visual_gauge_tick_labels_row, is_gauge)
         self._update_annunciator_part_rows()
 
     def _sync_visual_fields_from_doc(self) -> None:
         data = dict(self._button_doc.current_data or {})
         self._button_visual_syncing = True
         try:
-            action_type = str(data.get("type") or "push")
+            action_type = str(data.get("activation") or "push")
             family = self._activation_family_for_type(action_type)
             self._set_visual_combo_value(self.visual_activation_family_combo, family)
             self._populate_activation_subtypes(action_type)
             self._set_visual_combo_value(self.visual_type_combo, action_type)
 
             ann = data.get("annunciator")
-            style = "annunciator" if isinstance(ann, dict) else "standard"
+            gauge = data.get("gauge")
+            if isinstance(ann, dict):
+                style = "annunciator"
+            elif isinstance(gauge, dict):
+                style = "gauge"
+            else:
+                style = "standard"
             rep_family = self._representation_family_for_style(style)
             self._set_visual_combo_value(self.visual_representation_family_combo, rep_family)
             self._populate_representation_subtypes(style)
             self._set_visual_combo_value(self.visual_style_combo, style)
 
-            self.visual_command_edit.setText(str(data.get("command") or ""))
+            cmds = data.get("commands") or {}
+            self.visual_command_edit.setText(str(cmds.get("press") or ""))
             command1 = ""
             command2 = ""
             pair_fields = _two_command_fields(action_type)
             if pair_fields is not None:
-                command1 = str(data.get(pair_fields[0]) or "")
-                command2 = str(data.get(pair_fields[1]) or "")
+                command1 = str(cmds.get(pair_fields[0]) or "")
+                command2 = str(cmds.get(pair_fields[1]) or "")
             self.visual_command1_edit.setText(command1)
             self.visual_command2_edit.setText(command2)
             self.visual_page_edit.setText(str(data.get("page") or ""))
@@ -2416,6 +2619,7 @@ class EditorTab(QWidget):
             self.visual_deck_edit.setText(str(data.get("deck") or ""))
             self.visual_label_edit.setText(str(data.get("label") or ""))
             self.visual_label_size.setValue(int(data.get("label-size") or 0))
+            self.visual_label_color_edit.setText(str(data.get("label-color") or ""))
             self.visual_text_edit.setText(str(data.get("text") or ""))
             self.visual_text_size.setValue(int(data.get("text-size") or 0))
             self.visual_text_color_edit.setText(str(data.get("text-color") or ""))
@@ -2430,6 +2634,7 @@ class EditorTab(QWidget):
             if isinstance(ann, dict):
                 ann_model = str(ann.get("model") or "B")
                 ann_style = str(ann.get("annunciator-style") or "")
+                ann_size = str(ann.get("size") or "medium")
                 parts = ann.get("parts") or {}
                 if isinstance(parts, dict):
                     for part_id in _ANNUNCIATOR_PART_IDS.get(ann_model, []):
@@ -2442,8 +2647,10 @@ class EditorTab(QWidget):
                         part_leds[part_id] = str(part_cfg.get("led") or "")
             else:
                 ann_style = ""
+                ann_size = "medium"
             self._set_visual_combo_value(self.visual_ann_model, ann_model)
             self._set_visual_combo_value(self.visual_ann_style, ann_style)
+            self._set_visual_combo_value(self.visual_ann_size, ann_size)
             self._update_annunciator_part_rows()
             for idx, row in enumerate(self.visual_ann_part_rows):
                 part_ids = _ANNUNCIATOR_PART_IDS.get(ann_model, [])
@@ -2454,6 +2661,34 @@ class EditorTab(QWidget):
                 row["color_edit"].setText(part_colors.get(part_id, ""))
                 row["formula_edit"].setText(part_formulas.get(part_id, ""))
                 self._set_visual_combo_value(row["led_combo"], part_leds.get(part_id, ""))
+
+            # ── Gauge sync ────────────────────────────────────────────────────
+            g = gauge if isinstance(gauge, dict) else {}
+            self.visual_gauge_tick_from.setValue(int(g.get("tick-from") or -120))
+            self.visual_gauge_tick_to.setValue(int(g.get("tick-to") or 120))
+            self.visual_gauge_ticks.setValue(int(g.get("ticks") or 9))
+            self.visual_gauge_offset.setValue(int(g.get("gauge-offset") or 20))
+            self.visual_gauge_needle_color.setText(str(g.get("needle-color") or ""))
+            self.visual_gauge_needle_width.setValue(int(g.get("needle-width") or 0))
+            self.visual_gauge_needle_length.setValue(int(g.get("needle-length") or 0))
+            self.visual_gauge_tick_color.setText(str(g.get("tick-color") or ""))
+            self.visual_gauge_tick_width.setValue(int(g.get("tick-width") or 0))
+            self.visual_gauge_tick_label_size.setValue(int(g.get("tick-label-size") or 0))
+            self.visual_gauge_formula_edit.setText(str(data.get("formula") or ""))
+            tick_labels = g.get("tick-labels")
+            if isinstance(tick_labels, list):
+                self.visual_gauge_tick_labels.setPlainText("\n".join(str(t) for t in tick_labels))
+            else:
+                self.visual_gauge_tick_labels.setPlainText("")
+
+            # ── Span sync ─────────────────────────────────────────────────────
+            span = data.get("span")
+            if isinstance(span, (list, tuple)) and len(span) == 2:
+                self.visual_span_cols.setValue(max(1, int(span[0])))
+                self.visual_span_rows.setValue(max(1, int(span[1])))
+            else:
+                self.visual_span_cols.setValue(1)
+                self.visual_span_rows.setValue(1)
         finally:
             self._button_visual_syncing = False
         self._update_visual_field_visibility()
@@ -2463,7 +2698,7 @@ class EditorTab(QWidget):
         if self._button_visual_syncing:
             return
         sender = self.sender()
-        previous_type = str((self._button_doc.current_data or {}).get("type") or "push")
+        previous_type = str((self._button_doc.current_data or {}).get("activation") or "push")
         if sender is self.visual_activation_family_combo:
             self._populate_activation_subtypes()
         elif sender is self.visual_representation_family_combo:
@@ -2484,8 +2719,7 @@ class EditorTab(QWidget):
                 data.pop(key, None)
 
         action_type = str(self.visual_type_combo.currentData() or self.visual_type_combo.currentText())
-        _set_or_del("type", action_type)
-        _set_or_del("command", self.visual_command_edit.text())
+        _set_or_del("activation", action_type)
         _set_or_del("page", self.visual_page_edit.text())
         _set_or_del("deck", self.visual_deck_edit.text())
         _set_or_del("label", self.visual_label_edit.text())
@@ -2496,29 +2730,48 @@ class EditorTab(QWidget):
 
         if action_type != previous_type:
             pair_fields = _two_command_fields(action_type)
-            if action_type in {"onoff", "updown"} and pair_fields is not None:
+            if action_type == "encoder-toggle" and pair_fields is not None:
                 label = str(data.get("label") or data.get("text") or data.get("name") or "BUTTON").strip().upper()
-                data.setdefault(pair_fields[0], f"sim/none/{label.lower()}_{pair_fields[0].split('-', 1)[1]}")
-                data.setdefault(pair_fields[1], f"sim/none/{label.lower()}_{pair_fields[1].split('-', 1)[1]}")
+                cmds = dict(data.get("commands") or {})
+                cmds.setdefault(pair_fields[0], f"sim/none/{label.lower()}_on")
+                cmds.setdefault(pair_fields[1], f"sim/none/{label.lower()}_off")
+                data["commands"] = cmds
             elif action_type == "short-or-long-press" and pair_fields is not None:
                 label = str(data.get("label") or data.get("text") or data.get("name") or "BUTTON").strip().upper()
-                data.setdefault(pair_fields[0], f"sim/none/{label.lower()}_short")
-                data.setdefault(pair_fields[1], f"sim/none/{label.lower()}_long")
+                cmds = dict(data.get("commands") or {})
+                cmds.setdefault(pair_fields[0], f"sim/none/{label.lower()}_short")
+                cmds.setdefault(pair_fields[1], f"sim/none/{label.lower()}_long")
+                data["commands"] = cmds
             elif action_type == "page" and not str(data.get("page") or "").strip():
                 data["page"] = "index"
             elif action_type == "page-cycle" and not isinstance(data.get("pages"), list):
                 data["pages"] = ["index", "page2"]
 
+        # Write commands dict — build from current UI state
+        cmds = dict(data.get("commands") or {})
         pair_fields = _two_command_fields(action_type)
         if pair_fields is not None:
             command1 = self.visual_command1_edit.text().strip()
             command2 = self.visual_command2_edit.text().strip()
-            _set_or_del(pair_fields[0], command1)
-            _set_or_del(pair_fields[1], command2)
-            data.pop("command", None)
+            if command1:
+                cmds[pair_fields[0]] = command1
+            else:
+                cmds.pop(pair_fields[0], None)
+            if command2:
+                cmds[pair_fields[1]] = command2
+            else:
+                cmds.pop(pair_fields[1], None)
+            cmds.pop("press", None)
         else:
-            for key in ("command-on", "command-off", "command-up", "command-down", "command-short", "command-long"):
-                data.pop(key, None)
+            press_cmd = self.visual_command_edit.text().strip()
+            if press_cmd:
+                cmds["press"] = press_cmd
+            else:
+                cmds.pop("press", None)
+        if cmds:
+            data["commands"] = cmds
+        else:
+            data.pop("commands", None)
 
         if action_type == "page-cycle":
             pages = [part.strip() for part in self.visual_pages_edit.text().split(",") if part.strip()]
@@ -2530,6 +2783,10 @@ class EditorTab(QWidget):
             data.pop("pages", None)
 
         style = str(self.visual_style_combo.currentData() or "standard")
+        if style == "gauge":
+            _set_or_del("label-color", self.visual_label_color_edit.text())
+        else:
+            data.pop("label-color", None)
         if style == "annunciator":
             data.pop("text", None)
             data.pop("text-size", None)
@@ -2541,7 +2798,7 @@ class EditorTab(QWidget):
                 ann["annunciator-style"] = ann_style
             else:
                 ann.pop("annunciator-style", None)
-            ann.setdefault("size", "medium")
+            ann["size"] = str(self.visual_ann_size.currentData() or "medium")
             raw_parts = dict(ann.get("parts") or {})
             model = ann["model"]
             wanted_parts = _ANNUNCIATOR_PART_IDS.get(model, ["B0", "B1"])
@@ -2594,6 +2851,78 @@ class EditorTab(QWidget):
             data["annunciator"] = ann
         else:
             data.pop("annunciator", None)
+
+        if style == "gauge":
+            data.pop("text", None)
+            data.pop("text-size", None)
+            data.pop("text-color", None)
+            data.pop("annunciator", None)
+
+            def _int_or_del(d: dict, key: str, val: int, default: int) -> None:
+                if val != default:
+                    d[key] = val
+                else:
+                    d.pop(key, None)
+
+            def _str_or_del(d: dict, key: str, val: str) -> None:
+                if val.strip():
+                    d[key] = val.strip()
+                else:
+                    d.pop(key, None)
+
+            g = dict(data.get("gauge") or {})
+            g["tick-from"] = self.visual_gauge_tick_from.value()
+            g["tick-to"] = self.visual_gauge_tick_to.value()
+            g["ticks"] = self.visual_gauge_ticks.value()
+            if self.visual_gauge_offset.value() != 0:
+                g["gauge-offset"] = self.visual_gauge_offset.value()
+            else:
+                g.pop("gauge-offset", None)
+            _str_or_del(g, "needle-color", self.visual_gauge_needle_color.text())
+            needle_width = self.visual_gauge_needle_width.value()
+            if needle_width > 0:
+                g["needle-width"] = needle_width
+            else:
+                g.pop("needle-width", None)
+            needle_length = self.visual_gauge_needle_length.value()
+            if needle_length > 0:
+                g["needle-length"] = needle_length
+            else:
+                g.pop("needle-length", None)
+            _str_or_del(g, "tick-color", self.visual_gauge_tick_color.text())
+            tick_width = self.visual_gauge_tick_width.value()
+            if tick_width > 0:
+                g["tick-width"] = tick_width
+            else:
+                g.pop("tick-width", None)
+            tick_label_size = self.visual_gauge_tick_label_size.value()
+            if tick_label_size > 0:
+                g["tick-label-size"] = tick_label_size
+            else:
+                g.pop("tick-label-size", None)
+            raw_labels = self.visual_gauge_tick_labels.toPlainText().strip()
+            if raw_labels:
+                g["tick-labels"] = [line.strip() for line in raw_labels.splitlines() if line.strip()]
+            else:
+                g.pop("tick-labels", None)
+            if g:
+                data["gauge"] = g
+            else:
+                data.pop("gauge", None)
+            formula = self.visual_gauge_formula_edit.text().strip()
+            if formula:
+                data["formula"] = formula
+            else:
+                data.pop("formula", None)
+        else:
+            data.pop("gauge", None)
+
+        sc = self.visual_span_cols.value()
+        sr = self.visual_span_rows.value()
+        if sc > 1 or sr > 1:
+            data["span"] = [sc, sr]
+        else:
+            data.pop("span", None)
 
         self._button_doc.set_current_data(data)
         self._loading_file = True
@@ -2732,8 +3061,7 @@ class EditorTab(QWidget):
             meta = None
             error = "no preview target"
             warning = None
-            if preview_target_root is not None:
-                image_bytes, meta, error = render_button_preview_native(preview_target_root, preview_deck, preview_yaml_text)
+            image_bytes, meta, error = _render_preview_with_fallback(preview_target_root, preview_deck, preview_yaml_text)
             if isinstance(meta, dict):
                 meta_error = str(meta.get("error") or "").strip()
                 if meta_error and meta_error != "ok":
@@ -2799,6 +3127,9 @@ class EditorTab(QWidget):
         for button_id, button in self._visual_buttons.items():
             index = self._button_index(button)
             if index is None:
+                # Named-slot button — always queue preview since it's always visible
+                if button_id in self._visible_named_cards:
+                    self._ensure_button_preview(button_id)
                 continue
             if start_index <= index < end_index:
                 self._ensure_button_preview(button_id)
@@ -2850,8 +3181,16 @@ class EditorTab(QWidget):
             item = self.grid_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        for card in list(self._visible_named_cards.values()):
+            try:
+                card.deleteLater()
+            except RuntimeError:
+                pass
         self._visible_cards = {}
         self._visible_slots = {}
+        self._visible_cell_slots = {}
+        self._visible_named_cards = {}
+        self._span_card_specs = {}
 
         if not self._visual_enabled:
             self.visual_hint.setText("Visual mode is available for YAML page files with a `buttons:` list.")
@@ -2860,17 +3199,38 @@ class EditorTab(QWidget):
         self.visual_hint.setText(f"Grid {self._visual_cols}×{self._visual_rows}. Drag to move buttons. Drop on an occupied slot to swap.")
         self.zoom_label.setText(f"{int(round(self._visual_zoom * 100))}%")
 
+        tile_px = int(128 * self._visual_zoom)
+        gap_px = 8
+
+        for col in range(self._visual_cols):
+            self.grid_layout.setColumnMinimumWidth(col, tile_px)
+        for row in range(self._visual_rows):
+            self.grid_layout.setRowMinimumHeight(row, tile_px)
+
         by_index = {
             index: button_id
             for button_id, button in self._visual_buttons.items()
             if (index := self._button_index(button)) is not None
         }
 
+        # ── Compute span origins and covered cells ────────────────────────────
+        span_origins: dict[tuple[int, int], tuple[int, int, str]] = {}  # (r,c) → (sw, sh, btn_id)
+        for button_id, button in self._visual_buttons.items():
+            index = self._button_index(button)
+            if index is None:
+                continue
+            span = button.get("span")
+            if not isinstance(span, (list, tuple)) or len(span) != 2:
+                continue
+            sw, sh = max(1, int(span[0])), max(1, int(span[1]))
+            if sw == 1 and sh == 1:
+                continue
+            row = index // self._visual_cols
+            col = index % self._visual_cols
+            span_origins[(row, col)] = (sw, sh, button_id)
+
+        # ── Build QGridLayout ─────────────────────────────────────────────────
         for row in range(self._visual_rows):
-            row_widget = QWidget()
-            row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(8)
             for col in range(self._visual_cols):
                 slot_index = row * self._visual_cols + col
                 slot = _GridSlot(slot_index, dark=self._dark_mode, scale=self._visual_zoom)
@@ -2878,8 +3238,10 @@ class EditorTab(QWidget):
                 slot.create_requested.connect(self._create_new_button_at_index)
                 slot.context_requested.connect(self._show_slot_context_menu)
                 slot.deselect_requested.connect(self._clear_visual_selection)
+                self._visible_cell_slots[(row, col)] = slot
                 button_id = by_index.get(slot_index)
-                if button_id is not None:
+                span_origin = span_origins.get((row, col))
+                if button_id is not None and span_origin is None:
                     card = _VisualButtonCard(
                         button_id,
                         self._visual_buttons[button_id],
@@ -2894,13 +3256,69 @@ class EditorTab(QWidget):
                     self._visible_cards[button_id] = card
                     self._visible_slots[button_id] = slot
                     slot.set_card(card)
-                row_layout.addWidget(slot)
-            row_layout.addStretch(1)
-            self.grid_layout.addWidget(row_widget)
+                elif span_origin is not None:
+                    sw, sh, span_button_id = span_origin
+                    card = _VisualButtonCard(
+                        span_button_id,
+                        self._visual_buttons[span_button_id],
+                        dark=self._dark_mode,
+                        scale=self._visual_zoom,
+                        preview=self._preview_cache.get(self._preview_key(span_button_id)),
+                        preview_status=self._preview_errors.get(self._preview_key(span_button_id)),
+                        parent=self.grid_host,
+                    )
+                    card.selected.connect(self._set_selected_visual_button)
+                    card.edit_requested.connect(self._select_visual_button)
+                    card.context_requested.connect(self._show_button_context_menu)
+                    self._visible_cards[span_button_id] = card
+                    self._visible_named_cards[span_button_id] = card
+                    self._span_card_specs[span_button_id] = (row, col, sw, sh)
+                self.grid_layout.addWidget(slot, row, col, 1, 1)
+
+        # Stretch the last column and row so the grid stays top-left aligned
+        self.grid_layout.setColumnStretch(self._visual_cols, 1)
+        self.grid_layout.setRowStretch(self._visual_rows, 1)
+
+        # ── Named-slot buttons (legacy string indices) ────────────────────────
+        named_buttons = [
+            (button_id, button)
+            for button_id, button in self._visual_buttons.items()
+            if isinstance(button.get("index"), str) and not button.get("index", "").strip().lstrip("-").isdigit()
+        ]
+        if named_buttons:
+            extra_row = self._visual_rows + 1
+            sep_label = QLabel("Named Slots")
+            sep_label.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748b; padding: 4px 0 2px 0;")
+            self.grid_layout.addWidget(sep_label, extra_row, 0, 1, max(1, self._visual_cols))
+            named_row_widget = QWidget()
+            named_row_layout = QHBoxLayout(named_row_widget)
+            named_row_layout.setContentsMargins(0, 0, 0, 0)
+            named_row_layout.setSpacing(8)
+            for button_id, button in named_buttons:
+                card = _VisualButtonCard(
+                    button_id,
+                    button,
+                    dark=self._dark_mode,
+                    scale=self._visual_zoom,
+                    preview=self._preview_cache.get(self._preview_key(button_id)),
+                    preview_status=self._preview_errors.get(self._preview_key(button_id)),
+                )
+                card.selected.connect(self._set_selected_visual_button)
+                card.edit_requested.connect(self._select_visual_button)
+                card.context_requested.connect(self._show_button_context_menu)
+                self._visible_cards[button_id] = card
+                self._visible_named_cards[button_id] = card
+                named_row_layout.addWidget(card)
+            named_row_layout.addStretch(1)
+            self.grid_layout.addWidget(named_row_widget, extra_row + 1, 0, 1, max(1, self._visual_cols))
+        # ── end named slots ───────────────────────────────────────────────────
+
         self.grid_host.adjustSize()
         self.grid_host.updateGeometry()
         self.visual_root.adjustSize()
         self.visual_root.updateGeometry()
+        self.grid_layout.activate()
+        self._position_span_cards()
         self._apply_selection_highlights()
         QTimer.singleShot(0, self._queue_visible_previews)
 
@@ -2985,6 +3403,33 @@ class EditorTab(QWidget):
     def _apply_selection_highlights(self) -> None:
         for bid, slot in self._visible_slots.items():
             slot.set_selected(bid in self._selected_button_ids)
+        for bid, card in self._visible_named_cards.items():
+            card.set_selected(bid in self._selected_button_ids)
+
+    def _position_span_cards(self) -> None:
+        for button_id, spec in self._span_card_specs.items():
+            card = self._visible_named_cards.get(button_id)
+            if card is None:
+                continue
+            row, col, sw, sh = spec
+            rect = None
+            for dr in range(sh):
+                for dc in range(sw):
+                    slot = self._visible_cell_slots.get((row + dr, col + dc))
+                    if slot is None:
+                        continue
+                    cell_rect = slot.geometry()
+                    rect = cell_rect if rect is None else rect.united(cell_rect)
+            if rect is None:
+                continue
+            card.resize_to_span(
+                rect.width(),
+                rect.height(),
+                preview=self._preview_cache.get(self._preview_key(button_id)),
+                preview_status=self._preview_errors.get(self._preview_key(button_id)),
+            )
+            card.move(rect.topLeft())
+            card.raise_()
 
     def _clear_visual_selection(self) -> None:
         self._selected_button_ids.clear()
@@ -3223,6 +3668,8 @@ class EditorTab(QWidget):
                     ann["parts"] = cleaned_parts
                 else:
                     ann.pop("parts", None)
+        if button_id not in self._visual_buttons:
+            return False
         current_index = self._visual_buttons[button_id].get("index")
         if "index" not in data:
             data["index"] = current_index
@@ -3329,10 +3776,10 @@ class EditorTab(QWidget):
         new_button = {
             "index": target_index,
             "name": new_name,
-            "type": "push",
+            "activation": "push",
             "label": new_name,
             "label-size": 12,
-            "command": "sim/none/command",
+            "commands": {"press": "sim/none/command"},
         }
         self._visual_buttons[button_id] = new_button
         self._selected_button_id = button_id
@@ -3480,8 +3927,7 @@ class EditorTab(QWidget):
                 image_bytes = None
                 meta = None
                 error = "no preview target"
-                if preview_target_root is not None:
-                    image_bytes, meta, error = render_button_preview_native(preview_target_root, preview_deck, preview_yaml)
+                image_bytes, meta, error = _render_preview_with_fallback(preview_target_root, preview_deck, preview_yaml)
                 if error is None and isinstance(meta, dict):
                     meta_error = str(meta.get("error") or "").strip()
                     if meta_error and meta_error != "ok":
