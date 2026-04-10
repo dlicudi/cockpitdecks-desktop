@@ -69,7 +69,6 @@ from cockpitdecks_desktop.ui.deck_packs_tab import DeckPacksTab
 from cockpitdecks_desktop.ui.diagnostics_tab import DiagnosticsTab
 from cockpitdecks_desktop.ui.topology_tab import TopologyTab
 from cockpitdecks_desktop.ui.devices_tab import DevicesTab
-from cockpitdecks_desktop.ui.editor_tab import EditorTab
 from cockpitdecks_desktop.ui.releases_tab import ReleasesTab
 from cockpitdecks_desktop.ui.settings_dialog import SettingsFormWidget
 from cockpitdecks_desktop.ui.sparkline import SparklineWidget
@@ -975,15 +974,10 @@ class MainWindow(QMainWindow):
         self.topology_tab = TopologyTab()
         self.devices_tab = DevicesTab()
         self.devices_tab.log_line.connect(self._append)
-        self.editor_tab = EditorTab()
-        self.editor_tab.log_line.connect(self._append)
-        self.editor_tab.reload_requested.connect(self.reload_decks)
-
         self.tabs = QTabWidget()
         self.tabs.addTab(tab_status, "Status")
         self.tabs.addTab(self.topology_tab, "Topology")
         self.tabs.addTab(self.devices_tab, "Devices")
-        self.tabs.addTab(self.editor_tab, "Editor")
         self.tabs.addTab(tab_decks, "Decks")
         self.tabs.addTab(tab_config, "Config")
         self.tabs.addTab(self.releases_tab, "Releases")
@@ -1937,12 +1931,10 @@ class MainWindow(QMainWindow):
 
     def _on_deck_card_clicked(self, path: str) -> None:
         self._selected_deck_path = path
-        self.editor_tab.set_selected_target(path)
         self._populate_decks_list()
 
     def _select_decks_item_by_path(self, path: str) -> None:
         self._selected_deck_path = path
-        self.editor_tab.set_selected_target(path)
         self._populate_decks_list()
 
     def _selected_decks_target_path(self) -> str:
@@ -2861,8 +2853,6 @@ class MainWindow(QMainWindow):
             self._refresh_devices_panel()
         elif current_tab is self.topology_tab:
             self._refresh_topology_panel()
-        elif current_tab is self.editor_tab:
-            self._sync_editor_targets(self._selected_deck_path or self._configured_launch_target())
 
     def _update_preflight_checks(self, xplane_line: str, cockpit_web_line: str, session_info: "SessionInfo") -> None:
         def _set(icon: QLabel, lbl: QLabel, ok: bool | None, text: str) -> None:
@@ -2943,15 +2933,6 @@ class MainWindow(QMainWindow):
             self.log_line.emit(f"[{tag}] {msg}")
 
         threading.Thread(target=work, name="ReloadDecks", daemon=True).start()
-
-    def _sync_editor_targets(self, selected: str = "") -> None:
-        if not hasattr(self, "editor_tab"):
-            return
-        path = selected or self._configured_launch_target()
-        if not path and self._launch_targets:
-            path = self._launch_targets[0].path
-        if path:
-            self.editor_tab.set_selected_target(path)
 
     def start_cockpitdecks(self) -> None:
         # Reset log-analysis state for the new launch
