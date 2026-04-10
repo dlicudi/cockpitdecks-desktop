@@ -226,6 +226,18 @@ def render_button_preview_native(
         return None, None, str(exc)
 
 
+def list_preview_fonts(target_root: str | Path) -> list[str]:
+    """Return sorted font names available in the cockpitdecks preview context for target_root."""
+    try:
+        root = Path(target_root).expanduser().resolve()
+        pool = _get_pool(root)
+        ctx = pool.primary()
+        with ctx.lock:
+            return sorted(ctx.cockpit.fonts.keys())
+    except Exception:
+        return []
+
+
 def describe_slot_native(
     target_root: str | Path,
     deck_name: str,

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cockpitdecks_desktop.services.native_preview import describe_slot_native, render_button_preview_native, warm_preview_pool
+from cockpitdecks_desktop.services.native_preview import describe_slot_native, list_preview_fonts, render_button_preview_native, warm_preview_pool
 
 
 def _short_path(path: Path | str, *, max_len: int = 96) -> str:
@@ -1152,6 +1152,19 @@ class EditorTab(QWidget):
             text_edit.setPlaceholderText("Part text")
             part_host_layout.addWidget(text_edit)
 
+            part_font_row = QWidget()
+            part_font_layout = QHBoxLayout(part_font_row)
+            part_font_layout.setContentsMargins(0, 0, 0, 0)
+            part_font_layout.setSpacing(6)
+            font_combo = _NoWheelComboBox()
+            font_combo.setEditable(True)
+            font_combo.addItem("(default)", "")
+            font_combo.setCurrentIndex(0)
+            font_combo.lineEdit().setPlaceholderText("font name (default)")
+            part_font_layout.addWidget(QLabel("Font"))
+            part_font_layout.addWidget(font_combo, 1)
+            part_host_layout.addWidget(part_font_row)
+
             part_size_color_row = QWidget()
             part_size_color_layout = QHBoxLayout(part_size_color_row)
             part_size_color_layout.setContentsMargins(0, 0, 0, 0)
@@ -1191,6 +1204,7 @@ class EditorTab(QWidget):
                     "label": part_label,
                     "host": part_host,
                     "text_edit": text_edit,
+                    "font_combo": font_combo,
                     "text_size": text_size,
                     "color_edit": color_edit,
                     "formula_edit": formula_edit,
@@ -1266,6 +1280,7 @@ class EditorTab(QWidget):
             getattr(widget, signal_name).connect(self._apply_visual_fields_to_yaml)
         for row in self.visual_ann_part_rows:
             row["text_edit"].textChanged.connect(self._apply_visual_fields_to_yaml)
+            row["font_combo"].currentTextChanged.connect(self._apply_visual_fields_to_yaml)
             row["text_size"].valueChanged.connect(self._apply_visual_fields_to_yaml)
             row["color_edit"].textChanged.connect(self._apply_visual_fields_to_yaml)
             row["formula_edit"].textChanged.connect(self._apply_visual_fields_to_yaml)
@@ -1483,6 +1498,7 @@ class EditorTab(QWidget):
     def _set_target_path(self, path: Path | None) -> None:
         self._current_target_path = path
         self._suggestion_cache.clear()
+        self._refresh_font_combos()
         self._current_file_path = None
         self._set_editor_text("")
         self.file_label.setText("Select a config file")
@@ -1769,8 +1785,22 @@ class EditorTab(QWidget):
             self._preview_ready_targets.add(target_key)
         if self._current_target_path is None or str(self._current_target_path.resolve()) != target_key:
             return
+        self._refresh_font_combos()
         if self._visual_enabled and self.stack.currentWidget() is self.visual_scroll:
             self._queue_visible_previews()
+
+    def _refresh_font_combos(self) -> None:
+        fonts = list_preview_fonts(self._current_target_path) if self._current_target_path else []
+        for row in self.visual_ann_part_rows:
+            combo = row["font_combo"]
+            current = combo.currentText().strip()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("(default)", "")
+            for f in fonts:
+                combo.addItem(f, f)
+            self._combo_set_data_or_text(combo, current)
+            combo.blockSignals(False)
 
     def _reload_current_file(self) -> None:
         if self._current_file_path is None:
@@ -2392,6 +2422,7 @@ class EditorTab(QWidget):
 
             ann_model = "B"
             part_texts: dict[str, str] = {}
+            part_fonts: dict[str, str] = {}
             part_sizes: dict[str, int] = {}
             part_colors: dict[str, str] = {}
             part_formulas: dict[str, str] = {}
@@ -2404,6 +2435,7 @@ class EditorTab(QWidget):
                     for part_id in _ANNUNCIATOR_PART_IDS.get(ann_model, []):
                         part_cfg = parts.get(part_id) or {}
                         part_texts[part_id] = str(part_cfg.get("text") or "")
+                        part_fonts[part_id] = str(part_cfg.get("text-font") or "")
                         part_sizes[part_id] = int(part_cfg.get("text-size") or 0)
                         part_colors[part_id] = str(part_cfg.get("color") or "")
                         part_formulas[part_id] = str(part_cfg.get("formula") or "")
@@ -2417,6 +2449,7 @@ class EditorTab(QWidget):
                 part_ids = _ANNUNCIATOR_PART_IDS.get(ann_model, [])
                 part_id = part_ids[idx] if idx < len(part_ids) else ""
                 row["text_edit"].setText(part_texts.get(part_id, ""))
+                self._combo_set_data_or_text(row["font_combo"], part_fonts.get(part_id, ""))
                 row["text_size"].setValue(part_sizes.get(part_id, 0))
                 row["color_edit"].setText(part_colors.get(part_id, ""))
                 row["formula_edit"].setText(part_formulas.get(part_id, ""))
@@ -2518,6 +2551,7 @@ class EditorTab(QWidget):
                     continue
                 part_id = wanted_parts[idx]
                 text = row["text_edit"].text().strip()
+                font = row["font_combo"].currentText().strip()
                 text_size = row["text_size"].value()
                 color = row["color_edit"].text().strip()
                 formula = row["formula_edit"].text().strip()
@@ -2529,6 +2563,10 @@ class EditorTab(QWidget):
                         part_cfg.setdefault("color", "lime" if idx else "orange")
                 else:
                     part_cfg.pop("text", None)
+                if font and font != "(default)":
+                    part_cfg["text-font"] = font
+                else:
+                    part_cfg.pop("text-font", None)
                 if text_size > 0:
                     part_cfg["text-size"] = text_size
                 else:
@@ -2902,9 +2940,11 @@ class EditorTab(QWidget):
                     self._visual_buttons[other_id]["index"] = current_index
                     break
             current_button["index"] = target_index
+        scroll_pos = self.visual_scroll.verticalScrollBar().value()
         self._sync_text_from_visual()
         self._rebuild_visual_widgets()
         self._update_action_state()
+        QTimer.singleShot(0, lambda: self.visual_scroll.verticalScrollBar().setValue(scroll_pos))
 
     def _set_selected_visual_button(self, button_id: str) -> None:
         if button_id not in self._visual_buttons:
@@ -2971,11 +3011,13 @@ class EditorTab(QWidget):
             self._drop_preview_cache(bid)
         self._selected_button_ids.clear()
         self._selected_button_id = None
+        scroll_pos = self.visual_scroll.verticalScrollBar().value()
         self._sync_text_from_visual()
         self._rebuild_visual_widgets()
         self._refresh_selected_button_panel()
         self.status_label.setText(f"Deleted {len(ids)} button{'s' if len(ids) > 1 else ''}.")
         self._update_action_state()
+        QTimer.singleShot(0, lambda: self.visual_scroll.verticalScrollBar().setValue(scroll_pos))
 
     def _show_button_context_menu(self, button_id: str, global_pos: QPoint) -> None:
         if button_id not in self._visual_buttons:
@@ -3103,11 +3145,13 @@ class EditorTab(QWidget):
             new_ids.append(bid)
         self._selected_button_ids = set(new_ids)
         self._selected_button_id = new_ids[-1] if new_ids else None
+        scroll_pos = self.visual_scroll.verticalScrollBar().value()
         self._sync_text_from_visual()
         self._rebuild_visual_widgets()
         self._refresh_selected_button_panel()
         self.status_label.setText(f"Pasted {len(new_ids)} button{'s' if len(new_ids) > 1 else ''}.")
         self._update_action_state()
+        QTimer.singleShot(0, lambda: self.visual_scroll.verticalScrollBar().setValue(scroll_pos))
 
     def _paste_button_at_index(self, target_index: int) -> None:
         data = self._clipboard_button_data()
@@ -3141,11 +3185,13 @@ class EditorTab(QWidget):
             self._selected_button_id = button_id
             self._drop_preview_cache(button_id)
             target_label = button_id
+        scroll_pos = self.visual_scroll.verticalScrollBar().value()
         self._sync_text_from_visual()
         self._rebuild_visual_widgets()
         self._refresh_selected_button_panel()
         self._update_action_state()
         self.status_label.setText(f"Pasted button into slot {target_index}.")
+        QTimer.singleShot(0, lambda: self.visual_scroll.verticalScrollBar().setValue(scroll_pos))
 
     def _apply_button_yaml(self, button_id: str, text: str, *, silent: bool = False) -> bool:
         try:
@@ -3210,6 +3256,7 @@ class EditorTab(QWidget):
         self.stack.setCurrentWidget(self.button_edit_page)
         page_name = self._current_file_path.stem if self._current_file_path is not None else "page"
         self.file_label.setText(f'<a href="back">{page_name}</a> \u2192 {button_id}')
+        self._schedule_button_edit_preview()
         self._update_action_state()
 
     def _close_button_editor_workspace(self) -> None:
@@ -3232,6 +3279,7 @@ class EditorTab(QWidget):
         self._refresh_selected_button_panel()
         if self._visual_enabled:
             self.status_label.setText("Visual mode: drag buttons in the grid or double-click one to edit it.")
+            QTimer.singleShot(0, self._queue_visible_previews)
         self._update_action_state()
 
     def _apply_button_edit_workspace(self) -> None:
@@ -3304,11 +3352,13 @@ class EditorTab(QWidget):
             self._selected_button_id = None
         self._selected_button_ids.discard(button_id)
         self._drop_preview_cache(button_id)
+        scroll_pos = self.visual_scroll.verticalScrollBar().value()
         self._sync_text_from_visual()
         self._rebuild_visual_widgets()
         self._refresh_selected_button_panel()
         self.status_label.setText("Button deleted.")
         self._update_action_state()
+        QTimer.singleShot(0, lambda: self.visual_scroll.verticalScrollBar().setValue(scroll_pos))
 
     def _set_visual_zoom(self, value: float) -> None:
         new_zoom = max(0.5, min(2.0, round(value, 2)))
