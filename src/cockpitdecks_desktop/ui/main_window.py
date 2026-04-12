@@ -1709,7 +1709,6 @@ class MainWindow(QMainWindow):
     def _refresh_launch_targets(self) -> None:
         selected = self._configured_launch_target()
         self._launch_targets = self._discover_launch_targets()
-        self._sync_editor_targets(selected)
         self._populate_decks_list()
 
     def _selected_launch_target(self) -> Path | None:
@@ -1951,7 +1950,6 @@ class MainWindow(QMainWindow):
         save_desktop_settings(self._settings_with_updates(COCKPITDECKS_TARGET=path))
         self.settings_form.reload_from_disk()
         self._select_decks_item_by_path(path)
-        self._sync_editor_targets(path)
         self.refresh_info_panel()
 
     def _use_selected_decks_target(self) -> None:
