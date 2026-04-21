@@ -49,7 +49,7 @@ xplane = ["cockpitdecks_xp"]
 # msfs = ["cockpitdecks_fs @ git+https://github.com/devleaks/cockpitdecks_fs.git"]
 # Extensions
 weather = ["cockpitdecks_wm"]
-# toliss = ["cockpitdecks_tl @ git+https://github.com/devleaks/cockpitdecks_tl.git"]  # third-party, incompatible with monorepo workspace
+toliss = ["cockpitdecks_tl"]
 demoext = ["cockpitdecks_ext"]
 # Decks
 streamdeck = ["cockpitdecks_sd"]
@@ -84,6 +84,7 @@ cockpitdecks_ext = { workspace = true }
 cockpitdecks_sd = { workspace = true }
 cockpitdecks_ld = { workspace = true }
 cockpitdecks_bx = { workspace = true }
+cockpitdecks_tl = { workspace = true }
 
 # ###########################################
 #
