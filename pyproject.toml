@@ -1,2 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cockpitdecks-desktop"
+dynamic = ["version"]
+description = "Desktop companion app for Cockpitdecks setup, updates, diagnostics, and launch."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+  { name = "Cockpitdecks Team" }
+]
+dependencies = [
+  "certifi>=2024.0.0",
+  "PySide6>=6.9",
+  "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+cockpitdecks-desktop = "cockpitdecks_desktop.app:main"
+
+[tool.hatch.version]
+path = "src/cockpitdecks_desktop/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cockpitdecks_desktop"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/cockpitdecks_desktop/resources" = "cockpitdecks_desktop/resources"
+
 [tool.uv.workspace]
 members = ["packages/*"]
