@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cockpitdecks - {{ deck.name }} </title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<style type="text/css">
+/* Default to dark so no white flash before JS applies the deck's background color */
+:root {
+    --font-color: #424242;
+    --bg-color: #A8B7E6;
+    --background-color: #1c1c1c;
+    --deck-background-color: #1c1c1c;
+    --panel-color: rgba(22, 28, 36, 0.72);
+    --panel-border: rgba(255, 255, 255, 0.16);
+}
+/* light orange on dark grey */
+[data-theme="dark"] {
+    --font-color: #FECC66;
+    --bg-color: #333333;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: sans-serif;
+    background-color: var(--background-color);
+    overflow: hidden;
+}
+
+body {
+  color: var(--font-color);
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  width: 100dvw;
+  height: 100vh;
+  height: 100dvh;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+  box-sizing: border-box;
+  background:
+    radial-gradient(circle at top, rgba(255,255,255,0.2), transparent 45%),
+    linear-gradient(180deg, rgba(11, 18, 32, 0.08), rgba(11, 18, 32, 0.22));
+}
+
+#deck-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#deck {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  will-change: transform;
+  display: block;
+}
+
+</style>
+</head>
+<body>
+<div id="app">
+    <div id="deck-shell">
+        <canvas id="deck"></canvas>
+    </div>
+</div>
+
+<script src="/assets/js/deck.js" type="text/javascript"></script>
+<script type="text/javascript">
+//
+// Deck config (injected by Cockpitdecks Flask server)
+//
+const DECK = {{ deck|tojson(indent=2) }};
+
+const DEFAULT_BACKGROUND_COLOR_ALT = "#333333"
+
+const DECK_TYPE_KEY = 'deck-type-flat';
+
+const DEBUG = (DECK[DECK_TYPE_KEY].debug != undefined) ? DECK[DECK_TYPE_KEY].debug : false;
+const ZOOM  = (DECK[DECK_TYPE_KEY].zoom  != undefined) ? DECK[DECK_TYPE_KEY].zoom  : true;
+const DARK  = (DECK[DECK_TYPE_KEY].background?.alt_color != undefined);
+
+const BACKGROUND_COLOR_ALT = DECK[DECK_TYPE_KEY].background?.alt_color || DEFAULT_BACKGROUND_COLOR_ALT;
+
+// Apply the deck's background color to the page chrome so the area outside the
+// canvas matches the deck rather than showing the browser's default grey/white.
+const DECK_PAGE_BG = DECK[DECK_TYPE_KEY].background?.color || '#1c1c1c';
+document.documentElement.style.setProperty('--background-color', DECK_PAGE_BG);
+document.documentElement.style.setProperty('--deck-background-color', DECK_PAGE_BG);
+
+//
+// Canvas + LiveDeck setup
+//
+const DECK_SHELL_ELEM = document.getElementById('deck-shell');
+const canvas          = document.getElementById('deck');
+
+let deck_base_width  = 0;
+let deck_base_height = 0;
+let zoom_factor      = 1;
+
+function apply_viewport_layout() {
+    if (deck_base_width <= 0 || deck_base_height <= 0) return;
+    const shell_w = DECK_SHELL_ELEM.clientWidth  || window.innerWidth;
+    const shell_h = DECK_SHELL_ELEM.clientHeight || window.innerHeight;
+    const fit     = Math.min(shell_w / deck_base_width, shell_h / deck_base_height);
+    const scale   = Math.max(0.1, fit * zoom_factor);
+    const x = Math.max(0, (shell_w - deck_base_width  * scale) / 2);
+    const y = Math.max(0, (shell_h - deck_base_height * scale) / 2);
+    canvas.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+}
+
+window.cockpitdecksSetDeckSize = function(w, h) {
+    deck_base_width  = w;
+    deck_base_height = h;
+    apply_viewport_layout();
+};
+
+const deck = new LiveDeck(canvas, DECK);
+
+if (DARK && DECK.dark_mode) {
+    deck.set_background_image(null, BACKGROUND_COLOR_ALT);
+}
+
+// Defer layout reads until after the browser has committed the new geometry.
+// On iOS, orientationchange fires resize before clientWidth/clientHeight update,
+// so a direct call reads stale dimensions. Double-rAF is necessary on Safari.
+function schedule_viewport_layout() {
+    requestAnimationFrame(function() {
+        requestAnimationFrame(apply_viewport_layout);
+    });
+}
+
+window.addEventListener("resize", schedule_viewport_layout);
+if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", schedule_viewport_layout);
+}
+
+if (DEBUG) {
+    var debug_elem = document.createElement("div");
+    var code_elem  = document.createElement("pre");
+    code_elem.textContent = JSON.stringify(DECK, null, 2);
+    debug_elem.setAttribute("id", "debug");
+    debug_elem.appendChild(code_elem);
+    document.getElementsByTagName("body")[0].appendChild(debug_elem);
+}
+
+//
+// WebSocket
+//
+const WS_CONNECT_RETRY_TIME = 5000;
+const WS_STALE_TIMEOUT_MS = 15000;
+
+if (DECK.ws_url == undefined) {
+    console.error("No WebSocket address. Please start Cockpitdecks first.");
+}
+
+function sendCode(deckName, code) {
+    try {
+        if (ws) ws.send(JSON.stringify({"code": code, "deck": deckName}));
+    } catch(e) { console.error("sendCode", e); }
+}
+
+function sendEvent(deckName, key, value, data) {
+    try {
+        if (ws) ws.send(JSON.stringify({"code": 0, "deck": deckName, "key": key, "event": value, "data": data}));
+    } catch(e) { console.error("sendEvent", e); }
+}
+
+var ws;
+var ws_retry_timer = null;
+var ws_health_timer = null;
+var ws_last_activity_at = 0;
+
+function scheduleReconnect(delay = WS_CONNECT_RETRY_TIME) {
+    if (ws_retry_timer) return;
+    ws_retry_timer = setTimeout(function() {
+        ws_retry_timer = null;
+        connect();
+    }, delay);
+}
+
+function resetHealthTimer(socket) {
+    ws_last_activity_at = Date.now();
+    if (ws_health_timer) clearTimeout(ws_health_timer);
+    ws_health_timer = setTimeout(function() {
+        const stale = Date.now() - ws_last_activity_at >= WS_STALE_TIMEOUT_MS;
+        if (!stale) {
+            resetHealthTimer(socket);
+            return;
+        }
+        console.warn("WebSocket stale, forcing reconnect");
+        try { socket.close(); } catch(e) { console.error("close stale socket", e); }
+        if (ws === socket) ws = false;
+        scheduleReconnect(250);
+    }, WS_STALE_TIMEOUT_MS);
+}
+
+function connect() {
+    if (!DECK.ws_url) { console.error("No WebSocket URL — Cockpitdecks not running?"); return; }
+    if (ws && ws.readyState !== WebSocket.CLOSED) return;
+    console.log("WebSocket trying every " + Math.round(WS_CONNECT_RETRY_TIME/1000) + " seconds...");
+    var socket = new WebSocket(DECK.ws_url);
+
+    socket.onopen = function(event) {
+        console.log("WebSocket opened", DECK.ws_url);
+        ws = socket;
+        resetHealthTimer(socket);
+        try { if (ws) sendCode(DECK.name, 1); } catch(e) { console.error("onopen", e); }
+    };
+
+    socket.onmessage = function(event) {
+        resetHealthTimer(socket);
+        let data;
+        try { data = JSON.parse(event.data); } catch(e) {
+            console.error("invalid websocket payload", e);
+            return;
+        }
+        if (data.code == 0) {
+            if (data.span) { deck.set_key_span(data.key, data.span); }
+            deck.set_key_image(data.key, data.image, data.meta);
+        } else if (data.code == 1) {
+            deck.clear_images();
+        } else if (data.code == 2) {
+            deck.play_sound(data.sound, data.type);
+        } else if (data.code == 8) {
+            console.log("received init code, reloading");
+            window.location.reload();
+        } else if (data.code == 99) {
+            // ping — no-op
+        } else {
+            console.log("unhandled code", data.code);
+        }
+    };
+
+    socket.onclose = function() {
+        if (ws_health_timer) {
+            clearTimeout(ws_health_timer);
+            ws_health_timer = null;
+        }
+        if (ws === socket) ws = false;
+        scheduleReconnect();
+    };
+
+    socket.onerror = function() {
+        resetHealthTimer(socket);
+        if (socket) socket.close();
+    };
+}
+
+connect();
+document.addEventListener("visibilitychange", function() {
+    if (!document.hidden && (!ws || ws.readyState === WebSocket.CLOSED)) {
+        scheduleReconnect(250);
+    }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,272 @@
+---
+aircraft: Demo
+description: Sample cockpidecks icon demo - Page 2
+version: 1.0.0
+buttons:
+  - index: e0
+    type: encoder
+    commands:
+      - none
+      - none
+    formula: ${state:turns}
+    set-dataref: data:encoder0
+  - index: 0
+    # label: "Connection Status"
+    # label-size: 8
+    type: none
+    multi-texts:
+      - text: |+
+          NOT
+          CONNECTED
+
+        text-color: red
+        text-size: 14
+        text-font: D-DIN-Bold
+        text-position: cb
+        text-bg-texture: xplane-empty.png
+      - text: |+
+          CONNECTING...
+
+        text-size: 14
+        text-color: orange
+        text-font: D-DIN-Bold
+        text-position: cb
+        text-bg-texture: xplane-empty.png
+      - text: |+
+          CONNECTING...
+
+        text-size: 14
+        text-color: orange
+        text-font: D-DIN-Bold
+        text-position: cb
+        text-bg-texture: xplane-empty.png
+      - text: |+
+          CONNECTING...
+
+        text-size: 14
+        text-color: orange
+        text-font: D-DIN-Bold
+        text-position: cb
+        text-bg-texture: xplane-empty.png
+      - text: |+
+          CONNECTED
+
+        text-color: lime
+        text-size: 14
+        text-font: D-DIN-Bold
+        text-position: cb
+        text-bg-texture: xplane-empty.png
+    text-bg-texture: xplane-empty.png
+    formula: ${data:_connection_status}
+  - index: 1
+    name: MASTER WARNING
+    type: push
+    command: none
+    sound: seatbelt.wav
+    annunciator-animate:
+      formula: ${state:activation_count} 2 mod 0 eq
+      text: |-
+        MASTER
+        WARN
+      text-color: firebrick
+      text-font: D-DIN-Bold.otf
+      text-size: 64
+      animation-speed: 2.0
+    annunciator-style: k
+  - index: 2
+    name: FRAMED ICON
+    label: ICON IN ICON
+    label-size: 9
+    type: none
+    icon: isi
+    frame:
+      frame: annun-template.png
+      frame-size:
+        - 400
+        - 400
+      content-size:
+        - 222
+        - 222
+      content-offset:
+        - 90
+        - 125
+  - index: 3
+    name: AIRCRAFT
+    label: AIRCRAFT
+    type: none
+    text: |-
+      ${sim/aircraft/view/acf_ICAO}
+      ${sim/aircraft/view/acf_tailnum}
+      ${data:_livery}
+    text-size: 18
+  # - index: 3
+  #   type: push
+  #   multi-texts:
+  #     - text: "HELLO\nPRESS ME"
+  #       text-size: 20
+  #     - text: "WORLD\nPRESS ME"
+  #       text-size: 20
+  #   formula: ${state:activation_count} 2 %
+  - index: 4
+    type: none
+    dataref: AirbusFBW/DDRMIHeadingAngle
+    tape:
+      tick-color: lime
+      tick-font: D-DIN-Bold
+      tick-size: 60
+      rule-color: white
+      minimum: 0
+      maximum: 360
+      rule-position: bottom
+  - index: 5
+    name: Sample Gauge
+    type: none
+    gauge:
+      tick-from: -120
+      tick-to: 120
+      ticks: 8
+      gauge-offset: 20
+      needle-color: lime
+    dataref: data:encoder0
+  - index: 6
+    type: onoff
+    label: LAST 60 SECONDS
+    label-size: 7
+    commands:
+      - none
+      - none
+    chart:
+      value-min: auto
+      value-max: auto
+      axis: 0
+      tick: 10
+      tick-format: '{:2.0f}'
+      tick-color: black
+      rule-height: 50
+      charts:
+        - name: Encoder Zero
+          type: line
+          keep: 20
+          time-width: 60
+          value-max: 10
+          value-min: -10
+          color: lime
+          marker: square
+          formula: ${data:encoder0} 5 * 50 +
+          # - name: serie2
+          #   type: bar
+          #   update: 1
+          #   keep: 20
+          #   speed: 1
+          #   color: [255, 0, 0, 20]
+          #   formula: ${data:random}
+  - index: 7
+    name: ND RANGE
+    type: updown
+    stops: 6
+    initial-value: 3
+    circular-switch:
+      button-size: 50
+      button-fill-color: lightgrey
+      switch-style: medium
+      down: 30
+      tick-from: 90
+      tick-to: 315
+      tick-space: 40
+      tick-width: 1
+      tick-underline-width: 0
+      tick-color: white
+      tick-underline-color: white
+      tick-mode: arrow
+      tick-off-color: grey
+      needle-underline-width: 0
+      needle-color: lime
+      needle-start: 90
+      needle-length: 0
+      needle-tip: arri
+      needle-tip-size: 6
+      # arro, arri, ball
+      tick-label-size: 28
+      tick-labels:
+        - "10"
+        - "20"
+        - "40"
+        - "80"
+        - "160"
+        - "320"
+    commands:
+      - none
+      - none
+    formula: ${state:stop_current}
+  # - index: 8
+  #   name: INSPECT DATAREFS
+  #   label: DATAREF VALUES
+  #   type: inspect
+  #   what: datarefs
+  #   text: "= ?"
+  #   text-color: lime
+  #   text-font: D-DIN-Bold
+  #   text-size: 60
+  #   text-position: cm
+  - index: 8
+    name: SECONDS
+    label: SECONDS
+    type: inspect
+    what: datarefs
+    formula: ${sim/cockpit2/clock_timer/local_time_seconds} round
+    text: ${formula}
+    text-format: '{:02.0f}'
+    text-color: lime
+    text-font: D-DIN-Bold
+    text-size: 32
+    text-position: cm
+  - index: 9
+    type: reload
+    label: |-
+      RELOAD
+
+      PAGE
+    label-position: cm
+    label-color: red
+    label-font: D-DIN-Bold.otf
+    label-size: 20
+    text: ${fa:rotate-left}
+    text-font: fontawesome.otf
+    text-color: lime
+    text-size: 70
+    text-position: cm
+  - index: 10
+    type: stop
+    label: |-
+      PRESS 2 SECS
+      TO LIFT GUARD
+    label-position: ct
+    label-size: 8
+    annunciator:
+      type: A
+      size: large
+      A0:
+        text: STOP
+        text-size: 60
+        color: firebrick
+        framed: true
+        formula: 1
+    guard:
+      dataref: data:guard_open
+      model: grid
+      color: (255,0,0,255)
+  - index: e3
+    type: onoff
+    set-dataref: data:guard_open
+  - index: 11
+    type: page
+    page: back
+    label: PREVIOUS PAGE
+    label-size: 9
+    text: ${fa:arrow-left}
+    text-font: fontawesome.otf
+    text-size: 60
+# Demos
+# hardware image for encoder?
+includes: hardware
+default-label-font: D-DIN-Bold

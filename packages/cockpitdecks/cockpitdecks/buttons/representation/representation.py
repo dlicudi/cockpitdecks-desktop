@@ -1,0 +1,318 @@
+"""
+Button display and rendering abstraction.
+All representations are listed at the end of this file.
+"""
+
+import logging
+import inspect
+from typing import Any
+
+from cockpitdecks import ID_SEP, DECK_KW, DECK_FEEDBACK, DEFAULT_ATTRIBUTE_PREFIX, parse_options
+
+
+logger = logging.getLogger(__name__)
+# logger.setLevel(logging.DEBUG)
+
+
+def _editor_label(name: str) -> str:
+    return name.replace("-", " ").replace("_", " ").strip().title()
+
+
+def _editor_role(name: str, normalized_type: str) -> str | None:
+    if name == "command":
+        return "command"
+    if name == "commands":
+        return "command-list"
+    if name.startswith("command-"):
+        return "command"
+    if name == "page":
+        return "page"
+    if name == "pages":
+        return "page-list"
+    if name == "page-labels":
+        return "page-label-list"
+    if name == "deck":
+        return "deck"
+    if name == "formula":
+        return "formula"
+    if name == "label":
+        return "label"
+    if name.startswith("label-"):
+        return "label-style"
+    if name == "text":
+        return "text"
+    if name.startswith("text-"):
+        return "text-style"
+    if normalized_type in ["font", "color", "icon", "sound"]:
+        return normalized_type
+    return None
+
+
+def _editor_normalize_parameter(name: str, spec: Any) -> dict:
+    if not isinstance(spec, dict):
+        return {"name": name, "label": _editor_label(name), "kind": "literal", "value": spec}
+
+    normalized = dict(spec)
+    ptype = normalized.get("type", "string")
+    type_map = {
+        "int": "integer",
+        "bool": "boolean",
+        "lov": "choice",
+        "choice": "choice",
+        "sub": "sub",
+        "sel": "selector",
+    }
+    normalized_type = type_map.get(ptype, ptype)
+    normalized["name"] = name
+    normalized["type"] = normalized_type
+    role = _editor_role(name, normalized_type)
+    if role is not None:
+        normalized["role"] = role
+    normalized.setdefault("label", normalized.get("prompt") or _editor_label(name))
+    if "mandatory" in normalized:
+        normalized["required"] = bool(normalized.pop("mandatory"))
+    if "default-value" in normalized:
+        normalized["default"] = normalized.pop("default-value")
+    if "lov" in normalized and "choices" not in normalized:
+        normalized["choices"] = normalized["lov"]
+
+    child = normalized.get("list")
+    if normalized_type in ["sub", "selector"] and isinstance(child, dict):
+        normalized["fields"] = {k: _editor_normalize_parameter(k, v) for k, v in child.items()}
+    elif normalized_type == "list" and isinstance(child, dict):
+        normalized["item_fields"] = {k: _editor_normalize_parameter(k, v) for k, v in child.items()}
+
+    if normalized_type == "selector" and isinstance(child, dict):
+        normalized["variants"] = {k: _editor_normalize_parameter(k, v) for k, v in child.items()}
+
+    return normalized
+
+
+def _editor_normalize_parameters(parameters: dict) -> dict:
+    return {name: _editor_normalize_parameter(name, spec) for name, spec in (parameters or {}).items()}
+
+
+def _editor_required_parameters(parameters: dict) -> list[str]:
+    return [name for name, spec in _editor_normalize_parameters(parameters).items() if spec.get("required")]
+
+
+def _editor_parameters_by_role(parameters: dict) -> dict[str, list[str]]:
+    roles: dict[str, list[str]] = {}
+    for name, spec in _editor_normalize_parameters(parameters).items():
+        role = spec.get("role")
+        if role is None:
+            continue
+        roles.setdefault(role, []).append(name)
+    return roles
+
+
+# ##########################################
+# REPRESENTATION
+#
+class Representation:
+    """
+    Base class for all representations
+    """
+
+    REPRESENTATION_NAME = "none"
+    EDITOR_FAMILY = "Representation"
+    EDITOR_LABEL = None
+    EDITOR_HINT = None
+    REQUIRED_DECK_FEEDBACKS = DECK_FEEDBACK.NONE
+
+    PARAMETERS = {
+        # this is activation
+        # "sound": {"label": "Sound", "type": "string"},
+        # "vibrate": {"label": "Vibrate", "type": "string"},
+    }
+
+    @classmethod
+    def parameters(cls) -> dict:
+        return cls.PARAMETERS
+
+    @classmethod
+    def name(cls) -> str:
+        return cls.REPRESENTATION_NAME
+
+    @classmethod
+    def get_required_capability(cls) -> list | tuple:
+        r = cls.REQUIRED_DECK_FEEDBACKS
+        return r if type(r) in [list, tuple] else [r]
+
+    @classmethod
+    def editor_family(cls) -> str:
+        return cls.EDITOR_FAMILY
+
+    @classmethod
+    def editor_label(cls) -> str:
+        return cls.EDITOR_LABEL or cls.__name__
+
+    @classmethod
+    def editor_hint(cls) -> str:
+        hint = cls.EDITOR_HINT
+        if hint:
+            return hint
+        doc = inspect.getdoc(cls) or ""
+        return doc.splitlines()[0].strip() if doc else ""
+
+    @classmethod
+    def editor_schema(cls) -> dict:
+        parameters = cls.parameters()
+        return {
+            "schema_version": 1,
+            "kind": "representation",
+            "name": cls.name(),
+            "subtype": cls.name(),
+            "label": cls.editor_label(),
+            "family": cls.editor_family(),
+            "hint": cls.editor_hint(),
+            "parameters": parameters,
+            "editor_fields": _editor_normalize_parameters(parameters),
+            "required_parameters": _editor_required_parameters(parameters),
+            "parameters_by_role": _editor_parameters_by_role(parameters),
+            "required_capabilities": [cap.value if hasattr(cap, "value") else str(cap) for cap in cls.get_required_capability()],
+        }
+
+    def __init__(self, button: "Button"):
+        self._inited = False
+        self.button = button
+        self._representation_config = button._config.get(self.name(), {})
+        if type(self._representation_config) is not dict:  # repres: something -> {"repres": something}
+            self._representation_config = {self.name(): self._representation_config}
+
+        self._vibrate = self.get_attribute("vibrate")
+        self._sound = self.get_attribute("sound")
+        self._cached = None
+        self.datarefs = None
+
+        self.button.deck.cockpit.set_logging_level(__name__)
+
+        self.options = parse_options(button._config.get("options"))
+
+        if type(self.REQUIRED_DECK_FEEDBACKS) not in [list, tuple]:
+            self.REQUIRED_DECK_FEEDBACKS = [self.REQUIRED_DECK_FEEDBACKS]
+
+        self.init()
+
+    @property
+    def _config(self):
+        return self.button._config
+
+    def init(self):  # ~ABC
+        self._inited = True
+
+    def get_activation_count(self) -> int:
+        return self.button._activation.get_activation_count()
+
+    def clean_cache(self):
+        self._cached = None
+
+    def can_render(self) -> bool:
+        button_cap = self.button._def[DECK_KW.FEEDBACK.value]
+        if button_cap not in self.get_required_capability():
+            logger.warning(f"button {self.button_name} has feedback capability {button_cap}, representation expects {self.REQUIRED_DECK_FEEDBACKS}.")
+            return False
+        return True
+
+    def get_id(self):
+        return ID_SEP.join([self.button.get_id(), type(self).__name__])
+
+    def inc(self, name: str, amount: float = 1.0, cascade: bool = True):
+        self.button.sim.inc_internal_variable(name=ID_SEP.join([self.get_id(), name]), amount=amount, cascade=cascade)
+
+    @property
+    def button_name(self):
+        return self.button.name if self.button is not None else "no button"
+
+    def get_attribute(self, attribute: str, default=None, propagate: bool = True, silence: bool = True):
+        # Is there such an attribute directly in the button defintion?
+        if attribute.startswith(DEFAULT_ATTRIBUTE_PREFIX):
+            logger.warning(f"button {self.button_name}: representation fetched default attribute {attribute}")
+
+        value = self._representation_config.get(attribute)
+        if value is not None:  # found!
+            if silence:
+                logger.debug(f"button {self.button_name} representation returning {attribute}={value}")
+            else:
+                logger.info(f"button {self.button_name} representation returning {attribute}={value}")
+            return self.button.deck.cockpit.convert_if_color_attribute(attribute=attribute, value=value, silence=silence)
+
+        if propagate:  # we just look at the button level if allowed, not above.
+            if not silence:
+                logger.info(f"button {self.button_name} representation propagate to button for {attribute}")
+            return self.button.get_attribute(attribute, default=default, propagate=propagate, silence=silence)
+
+        if not silence:
+            logger.warning(f"button {self.button_name}: representation attribute not found {attribute}, returning default ({default})")
+
+        return self.button.deck.cockpit.convert_if_color_attribute(attribute=attribute, value=default, silence=silence)
+
+    def get_state_variables(self) -> dict:
+        return {}
+
+    def inspect(self, what: str | None = None):
+        logger.info(f"{type(self).__name__}:")
+        logger.info(f"{self.is_valid()}")
+
+    def is_valid(self):
+        if self.button is None:
+            logger.warning(f"representation {type(self).__name__} has no button")
+            return False
+        return True
+
+    def has_option(self, option):
+        # Check whether a button has an option.
+        for opt in self.options:
+            if opt.split("=")[0].strip() == option:
+                return True
+        return False
+
+    def option_value(self, option, default=None):
+        # Return the value of an option or the supplied default value.
+        for opt in self.options:
+            opt = opt.split("=")
+            name = opt[0]
+            if name == option:
+                if len(opt) > 1:
+                    return opt[1]
+                else:  # found just the name, so it may be a boolean, True if present
+                    return True
+        return default
+
+    def get_variables(self) -> set:
+        # The value of the representation, the value the representation will use to drive its display
+        # is the value of the button.
+        return set()
+
+    def get_button_value(self):
+        # shortcut for representations
+        return self.button.value
+
+    def get_rescaled_value(self, range_min: float, range_max: float, steps: int | None = None):
+        return self.button._value.get_rescaled_value(range_min=range_min, range_max=range_max, steps=steps)
+
+    def get_status(self):
+        return {"representation_type": type(self).__name__, "sound": self._vibrate}
+
+    def render(self):
+        """
+        This is the main rendering function for all representations.
+        It returns what is appropriate to the button render() function which passes
+        it to the deck's render() function which takes appropriate action
+        to pass the returned value to the appropriate device function for display.
+        """
+        logger.debug(f"button {self.button_name}: {type(self).__name__} has no rendering")
+        return None
+
+    def vibrate(self):
+        return self.get_vibration()
+
+    def get_vibration(self):
+        return self._vibrate
+
+    def clean(self):
+        # logger.warning(f"button {self.button_name}: no cleaning")
+        pass
+
+    def describe(self) -> str:
+        return "The button does not produce any output."

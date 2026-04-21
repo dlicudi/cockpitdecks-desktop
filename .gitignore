@@ -203,9 +203,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .DS_Store
-resources/bin/cockpitdecks-launcher
+packages/cockpitdecks_desktop/resources/bin/cockpitdecks-launcher
 ogimet_cache.sqlite
+ogimet_weather_cache.sqlite
 variable-database-dump.yaml
 *.icns
+*.log
+XPPython3Log.txt
 settings.local.json
 .claude
