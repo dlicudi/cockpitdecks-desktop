@@ -5,37 +5,33 @@ Monorepo for Cockpitdecks and all first-party extensions, managed with uv worksp
 ## Project layout
 
 ```
-pyproject.toml                         # uv workspace root (members = packages/*)
-packages/
-  cockpitdecks/                        # Core library + Flask server
-    cockpitdecks/                      # Source package (flat layout)
-    pyproject.toml
+pyproject.toml                         # Desktop app + uv workspace root (members = packages/*)
+src/cockpitdecks_desktop/              # Desktop app source
+  app.py                               # Entry point (QApplication setup)
+  icon_loader.py                       # App icon loading & non-square PNG normalization
+  resources/                           # Bundled assets (app_icon.png)
+  services/
+    desktop_settings.py                # Persistent settings (paths, API URLs)
+    live_apis.py                       # Polling cockpitdecks & X-Plane REST endpoints
+    process_runner.py                  # Subprocess streaming helper
+  ui/
+    main_window.py                     # Main window: status dashboard, metrics, log, settings tab
+    app_style.py                       # Global QSS stylesheet
+    settings_dialog.py                 # Settings form widget
+packaging/pyinstaller/
+  desktop.spec                         # PyInstaller spec (bundles launcher sidecar + icon)
+scripts/
+  build_desktop.sh                     # One-shot PyInstaller build
+packages/                              # Cockpitdecks library packages
+  cockpitdecks/                        # Core library + Flask server (flat layout)
   cockpitdecks_xp/                     # X-Plane simulator interface
   cockpitdecks_wm/                     # Weather module
   cockpitdecks_ext/                    # Extra button/deck types
   cockpitdecks_ld/                     # Loupedeck deck driver integration
   cockpitdecks_sd/                     # Stream Deck driver integration
   cockpitdecks_bx/                     # Behringer X-Touch Mini integration
+  cockpitdecks_tl/                     # ToLiss aircraft extension
   xpwebapi/                            # X-Plane REST Web API client
-  cockpitdecks_desktop/                # PySide6 desktop companion app
-    src/cockpitdecks_desktop/
-      app.py                           # Entry point (QApplication setup)
-      icon_loader.py                   # App icon loading & non-square PNG normalization
-      resources/                       # Bundled assets (app_icon.png)
-      services/
-        desktop_settings.py            # Persistent settings (paths, API URLs)
-        live_apis.py                   # Polling cockpitdecks & X-Plane REST endpoints
-        process_runner.py              # Subprocess streaming helper
-      ui/
-        main_window.py                 # Main window: status dashboard, metrics, log, settings tab
-        app_style.py                   # Global QSS stylesheet
-        settings_dialog.py             # Settings form widget
-    packaging/pyinstaller/
-      desktop.spec                     # PyInstaller spec (bundles launcher sidecar + icon)
-    scripts/
-      build_desktop.sh                 # One-shot PyInstaller build
-  cockpitdecks_editor/                 # PySide6 config editor
-    src/cockpitdecks_editor/
 ```
 
 ## Development
@@ -72,6 +68,7 @@ Output goes to `packages/cockpitdecks_desktop/dist/`.
 
 ## Separate repos (not in monorepo)
 
+- **cockpitdecks-editor**: standalone config editor app (independent project)
 - **cockpitdecks-configs**: aircraft configuration files (content, not code)
 - **cockpitdecks-docs**: documentation site
 - **python-loupedeck-live**: Loupedeck hardware driver
