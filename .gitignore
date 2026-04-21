@@ -208,3 +208,4 @@ ogimet_cache.sqlite
 variable-database-dump.yaml
 *.icns
 settings.local.json
+.claude
