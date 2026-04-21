@@ -1,37 +1,29 @@
-# Cockpitdecks Monorepo
+# Cockpitdecks Desktop
 
-Monorepo for Cockpitdecks and all first-party extensions, managed with uv workspaces.
+Desktop companion app (PySide6/Qt) for setting up, updating, diagnosing, and launching Cockpitdecks.
+It orchestrates existing Cockpitdecks tooling — it does **not** duplicate cockpitdecks core logic.
 
 ## Project layout
 
 ```
-pyproject.toml                         # Desktop app + uv workspace root (members = packages/*)
-src/cockpitdecks_desktop/              # Desktop app source
-  app.py                               # Entry point (QApplication setup)
-  icon_loader.py                       # App icon loading & non-square PNG normalization
-  resources/                           # Bundled assets (app_icon.png)
+pyproject.toml                    # App package + build deps
+src/cockpitdecks_desktop/
+  app.py                          # Entry point (QApplication setup)
+  icon_loader.py                  # App icon loading & non-square PNG normalization
+  resources/                      # Bundled assets (app_icon.png)
   services/
-    desktop_settings.py                # Persistent settings (paths, API URLs)
-    live_apis.py                       # Polling cockpitdecks & X-Plane REST endpoints
-    process_runner.py                  # Subprocess streaming helper
+    desktop_settings.py           # Persistent settings (paths, API URLs)
+    live_apis.py                  # Polling cockpitdecks & X-Plane REST endpoints
+    process_runner.py             # Subprocess streaming helper
+    github_releases.py            # GitHub release fetch, download, install
   ui/
-    main_window.py                     # Main window: status dashboard, metrics, log, settings tab
-    app_style.py                       # Global QSS stylesheet
-    settings_dialog.py                 # Settings form widget
+    main_window.py                # Main window: status dashboard, metrics, log, settings tab
+    app_style.py                  # Global QSS stylesheet
+    settings_dialog.py            # Settings form widget
 packaging/pyinstaller/
-  desktop.spec                         # PyInstaller spec (bundles launcher sidecar + icon)
+  desktop.spec                    # PyInstaller spec (bundles launcher sidecar + icon)
 scripts/
-  build_desktop.sh                     # One-shot PyInstaller build
-packages/                              # Cockpitdecks library packages
-  cockpitdecks/                        # Core library + Flask server (flat layout)
-  cockpitdecks_xp/                     # X-Plane simulator interface
-  cockpitdecks_wm/                     # Weather module
-  cockpitdecks_ext/                    # Extra button/deck types
-  cockpitdecks_ld/                     # Loupedeck deck driver integration
-  cockpitdecks_sd/                     # Stream Deck driver integration
-  cockpitdecks_bx/                     # Behringer X-Touch Mini integration
-  cockpitdecks_tl/                     # ToLiss aircraft extension
-  xpwebapi/                            # X-Plane REST Web API client
+  build_desktop.sh                # One-shot PyInstaller build
 ```
 
 ## Development
@@ -41,35 +33,28 @@ uv sync
 uv run cockpitdecks-desktop
 ```
 
-To work on a specific package:
+## Build
 
 ```bash
-uv run --package cockpitdecks-desktop cockpitdecks-desktop
+uv sync --extra build
+scripts/build_desktop.sh
 ```
 
-## Build (desktop app)
-
-```bash
-packages/cockpitdecks_desktop/scripts/build_desktop.sh
-```
-
-Output goes to `packages/cockpitdecks_desktop/dist/`.
+Output goes to `dist/`.
 
 ## Key conventions
 
-- Package manager: **uv** with workspaces
-- Build system: **Hatchling** (all packages)
-- Cross-package dependencies use `[tool.uv.sources]` workspace references — no git URLs between workspace members
-- Hardware driver libs (`python-loupedeck-live`, `python-elgato-streamdeck`) remain external git dependencies
+- Package manager: **uv**
+- Build system: **Hatchling**
+- Python >=3.12, PySide6 >=6.9
 - UI style is set to **Fusion** (not native macOS) so QSS styling works consistently
-- The desktop app talks to cockpitdecks via its Flask endpoints (`/desktop-status`, `/desktop-metrics`) and to X-Plane via its REST Web API
-- `packages/cockpitdecks_desktop/resources/bin/cockpitdecks-launcher` is a sidecar binary — gitignored, bundled by PyInstaller at build time
+- The app talks to cockpitdecks via its Flask endpoints (`/desktop-status`, `/desktop-metrics`) and to X-Plane via its REST Web API
+- `resources/bin/cockpitdecks-launcher` is a sidecar binary — gitignored, bundled by PyInstaller at build time
 - Debug artifacts (`variable-database-dump.yaml`, `ogimet_cache.sqlite`, `*.log`) are gitignored
 
-## Separate repos (not in monorepo)
+## Related repos
 
-- **cockpitdecks-editor**: standalone config editor app (independent project)
-- **cockpitdecks-configs**: aircraft configuration files (content, not code)
+- **cockpitdecks**: core framework monorepo (cockpitdecks + all extensions)
+- **cockpitdecks-editor**: standalone config editor app (independent)
+- **cockpitdecks-configs**: aircraft configuration files
 - **cockpitdecks-docs**: documentation site
-- **python-loupedeck-live**: Loupedeck hardware driver
-- **python-elgato-streamdeck**: Stream Deck hardware driver
