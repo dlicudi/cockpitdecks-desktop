@@ -58,10 +58,10 @@ dynamic = [
 ]
 
 [project.urls]
-Homepage = "https://devleaks.github.io/cockpitdecks-docs/"
+Homepage = "https://github.com/dlicudi/cockpitdecks-desktop"
 Documentation = "https://devleaks.github.io/cockpitdecks-docs/"
-Issues = "https://github.com/devleaks/cockpitdecks_sd/issues"
-Source = "https://github.com/devleaks/cockpitdecks_sd"
+Issues = "https://github.com/dlicudi/cockpitdecks-desktop/issues"
+Source = "https://github.com/dlicudi/cockpitdecks-desktop"
 
 [tool.uv.sources]
 cockpitdecks = { workspace = true }

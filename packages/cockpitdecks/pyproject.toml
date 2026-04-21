@@ -69,10 +69,10 @@ development = [
 
 
 [project.urls]
-Homepage = "https://devleaks.github.io/cockpitdecks-docs/"
+Homepage = "https://github.com/dlicudi/cockpitdecks-desktop"
 Documentation = "https://devleaks.github.io/cockpitdecks-docs/"
-Issues = "https://github.com/devleaks/cockpitdecks/issues"
-Source = "https://github.com/devleaks/cockpitdecks"
+Issues = "https://github.com/dlicudi/cockpitdecks-desktop/issues"
+Source = "https://github.com/dlicudi/cockpitdecks-desktop"
 
 [project.scripts]
 cockpitdecks-cli = "cockpitdecks:start.main"

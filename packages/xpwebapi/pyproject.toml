@@ -48,16 +48,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://devleaks.github.io/xplane-webapi/"
-Documentation = "https://devleaks.github.io/xplane-webapi/"
-Issues = "https://github.com/devleaks/xplane-webapi/issues"
-Source = "https://github.com/devleaks/xplane-webapi"
+Homepage = "https://github.com/dlicudi/cockpitdecks-desktop"
+Documentation = "https://devleaks.github.io/cockpitdecks-docs/"
+Issues = "https://github.com/dlicudi/cockpitdecks-desktop/issues"
+Source = "https://github.com/dlicudi/cockpitdecks-desktop"
 
-
-# ###########################################
-#
-# Edit
-#
 [tool.ruff]
 line-length = 160
 
