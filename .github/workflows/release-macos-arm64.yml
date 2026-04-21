@@ -49,29 +49,20 @@ jobs:
             echo "- runner architecture: \`$(uname -m)\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
         with:
+          enable-cache: true
           python-version: "3.12"
 
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml', 'packaging/pyinstaller/desktop.spec') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+      - name: Install dependencies
+        run: uv sync --extra build
 
       - name: Build desktop app
         run: |
           set -euo pipefail
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip setuptools wheel hatchling
-          python -m pip install pyinstaller
-          python -m pip install -e .
           scripts/generate_icns.sh
-          pyinstaller --clean packaging/pyinstaller/desktop.spec
+          uv run pyinstaller --clean packaging/pyinstaller/desktop.spec
 
       - name: Verify desktop app
         run: |
