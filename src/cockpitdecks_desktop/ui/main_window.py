@@ -59,6 +59,7 @@ from cockpitdecks_desktop.services.live_apis import (
     fetch_session_info,
     reload_decks as api_reload_decks,
     set_target as api_set_target,
+    set_watch_config as api_set_watch_config,
     SessionInfo,
     xplane_capabilities_status_line,
 )
@@ -1006,6 +1007,7 @@ class MainWindow(QMainWindow):
         self.live_poll_done.connect(self._apply_live_poll)
         self.desktop_update_done.connect(self._apply_desktop_update_poll)
         self.settings_form.settings_saved.connect(self._on_settings_saved)
+        self.settings_form.watch_config_toggled.connect(self._on_watch_config_toggled)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
         self.setStyleSheet(MAIN_WINDOW_QSS)
@@ -2181,6 +2183,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Settings saved — {runtime_config_path().name} + {settings_path().name}", 4000)
         self._refresh_launch_targets()
         self.refresh_info_panel()
+
+    def _on_watch_config_toggled(self, enabled: bool) -> None:
+        st = load_desktop_settings()
+        base_url = cockpit_web_base(st)
+
+        def work() -> None:
+            ok, msg = api_set_watch_config(enabled, base_url=base_url)
+            tag = "watch" if ok else "watch-error"
+            self.log_line.emit(f"[{tag}] {msg}")
+
+        threading.Thread(target=work, name="SetWatchConfig", daemon=True).start()
 
     def _desktop_app_version(self) -> str:
         from cockpitdecks_desktop import __version__

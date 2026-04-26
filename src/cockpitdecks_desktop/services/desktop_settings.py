@@ -24,6 +24,7 @@ SHARED_DEFAULTS: dict[str, str] = {
     "API_PORT": "8086",
     "COCKPIT_WEB_HOST": "127.0.0.1",
     "COCKPIT_WEB_PORT": "7777",
+    "WATCH_CONFIG": "0",
 }
 
 DESKTOP_ONLY_DEFAULTS: dict[str, str] = {
@@ -150,6 +151,7 @@ def _flatten_runtime(raw: dict) -> dict[str, str]:
         "API_PORT": str(xplane_api.get("port") or SHARED_DEFAULTS["API_PORT"]).strip(),
         "COCKPIT_WEB_HOST": str(server.get("host") or SHARED_DEFAULTS["COCKPIT_WEB_HOST"]).strip() or SHARED_DEFAULTS["COCKPIT_WEB_HOST"],
         "COCKPIT_WEB_PORT": str(server.get("port") or SHARED_DEFAULTS["COCKPIT_WEB_PORT"]).strip(),
+        "WATCH_CONFIG": "1" if raw.get("watch_config") else "0",
     }
 
 
@@ -168,6 +170,7 @@ def _save_runtime(values: dict[str, str]) -> None:
     doc["deck_paths"] = _split_paths(values.get("COCKPITDECKS_PATH", ""))
     doc["target"] = (values.get("COCKPITDECKS_TARGET") or "").strip() or None
     doc["simulator_host"] = (values.get("SIMULATOR_HOST") or "").strip() or None
+    doc["watch_config"] = values.get("WATCH_CONFIG", "0") == "1"
 
     xplane_api = dict(doc.get("xplane_api") or {}) if isinstance(doc.get("xplane_api"), dict) else {}
     xplane_api["host"] = (values.get("API_HOST") or SHARED_DEFAULTS["API_HOST"]).strip() or SHARED_DEFAULTS["API_HOST"]

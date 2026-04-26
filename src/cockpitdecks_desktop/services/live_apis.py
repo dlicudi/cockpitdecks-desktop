@@ -280,6 +280,47 @@ def set_target(target: str, *, base_url: str = "http://127.0.0.1:7777", timeout:
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         return False, str(exc)
 
+def get_watch_config(*, base_url: str = "http://127.0.0.1:7777", timeout: float = 3.0) -> tuple[bool | None, str | None]:
+    """GET /api/watch. Returns (enabled, error_or_none)."""
+    url = f"{base_url.rstrip('/')}/api/watch"
+    try:
+        req = Request(url, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return bool(data.get("watch_config", False)), None
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None, "Cockpitdecks too old: /api/watch missing"
+        return None, f"HTTP {exc.code}"
+    except URLError:
+        return None, "Cockpitdecks not running"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return None, str(exc)
+
+
+def set_watch_config(enabled: bool, *, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
+    """POST /api/watch to enable or disable live config file watching. Returns (ok, message)."""
+    url = f"{base_url.rstrip('/')}/api/watch"
+    body = json.dumps({"watch_config": enabled}).encode("utf-8")
+    try:
+        req = Request(url, data=body, headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        status = data.get("status", "") if isinstance(data, dict) else ""
+        if status == "ok":
+            state = "enabled" if enabled else "disabled"
+            return True, f"Config file watching {state}"
+        return False, f"Unexpected response: {str(data)[:120]}"
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False, "Cockpitdecks too old: /api/watch missing"
+        return False, f"HTTP {exc.code}"
+    except URLError:
+        return False, "Cockpitdecks not running"
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return False, str(exc)
+
+
 def reload_deck(deck_name: str, *, base_url: str = "http://127.0.0.1:7777", timeout: float = 5.0) -> tuple[bool, str]:
     """POST /api/deck/<name>/reload. Returns (ok, message)."""
     encoded_deck_name = quote(deck_name, safe="")

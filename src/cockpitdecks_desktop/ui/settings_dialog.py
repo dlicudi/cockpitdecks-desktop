@@ -78,6 +78,7 @@ class SettingsFormWidget(QWidget):
     """Grouped settings editor. Auto-saves 450 ms after the last change."""
 
     settings_saved = Signal()
+    watch_config_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None, data: dict[str, str] | None = None) -> None:
         super().__init__(parent)
@@ -104,6 +105,13 @@ class SettingsFormWidget(QWidget):
         self.chk_launcher_custom.setChecked(use_custom)
         self.chk_launcher_custom.setStyleSheet("font-size: 11px; font-weight: 600; color: #374151; border: none; margin-top: 6px;")
         root.addWidget(self.chk_launcher_custom)
+
+        watch_config = data.get("WATCH_CONFIG", "0") == "1"
+        self.chk_watch_config = QCheckBox("Auto-reload decks on config file change")
+        self.chk_watch_config.setChecked(watch_config)
+        self.chk_watch_config.setStyleSheet("font-size: 11px; font-weight: 600; color: #374151; border: none; margin-top: 6px;")
+        root.addWidget(self.chk_watch_config)
+        root.addWidget(_hint("Requires watchdog (pip install 'cockpitdecks[watch]'). When enabled, saving any YAML in deckconfig automatically reloads decks."))
 
         self.ed_launcher = QLineEdit(data.get("COCKPITDECKS_LAUNCHER_PATH", ""))
         self.ed_launcher.setPlaceholderText("e.g. ~/GitHub/cockpitdecks/scripts/cockpitdecks.sh")
@@ -208,6 +216,8 @@ class SettingsFormWidget(QWidget):
         ):
             ed.textChanged.connect(self._schedule_save)
         self.chk_launcher_custom.toggled.connect(self._schedule_save)
+        self.chk_watch_config.toggled.connect(self._schedule_save)
+        self.chk_watch_config.toggled.connect(self.watch_config_toggled)
 
     # ── Path list helpers ─────────────────────────────────────────────────
 
@@ -295,6 +305,10 @@ class SettingsFormWidget(QWidget):
         self.chk_launcher_custom.blockSignals(False)
         self.ed_launcher.setEnabled(use_custom)
         self._btn_launcher.setEnabled(use_custom)
+        watch_config = data.get("WATCH_CONFIG", "0") == "1"
+        self.chk_watch_config.blockSignals(True)
+        self.chk_watch_config.setChecked(watch_config)
+        self.chk_watch_config.blockSignals(False)
         pairs: list[tuple[QLineEdit, str]] = [
             (self.ed_launcher,   data.get("COCKPITDECKS_LAUNCHER_PATH", "")),
             (self.ed_launch_log, data.get("COCKPITDECKS_LAUNCH_LOG_PATH", "")),
@@ -322,4 +336,5 @@ class SettingsFormWidget(QWidget):
             "API_PORT":                       self.ed_api_port.text().strip(),
             "COCKPIT_WEB_HOST":               self.ed_web_host.text().strip(),
             "COCKPIT_WEB_PORT":               self.ed_web_port.text().strip(),
+            "WATCH_CONFIG":                   "1" if self.chk_watch_config.isChecked() else "0",
         }
